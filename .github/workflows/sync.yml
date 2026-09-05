@@ -1,0 +1,356 @@
+name: Mirror & Sync Upstream Repository
+
+# Mirrors this repository's fork parent (the upstream project it was forked
+# from) into this repo: full git history, all releases with their assets,
+# all GHCR container images, and the wiki.
+#
+# Requirements:
+#   1. This repository must be a GitHub fork of the project you want to
+#      mirror. The source is auto-detected from the fork's parent, so
+#      there is nothing to configure per project.
+#   2. After adding this file, open the Actions tab of the fork once and
+#      enable workflows (GitHub disables Actions on new forks by default,
+#      and scheduled runs will never fire until this is done).
+#   3. Add a repository secret named GH_PAT: a classic Personal Access
+#      Token (github.com/settings/tokens -> Generate new token (classic))
+#      with the "repo" and "workflow" and "write:packages" scopes.
+#
+# This performs a hard mirror (git push --mirror): do not push commits
+# directly to this repository, they will be overwritten on the next run.
+
+on:
+  schedule:
+    - cron: '0 * * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: upstream-sync
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  sync-code:
+    name: Detect upstream & sync commits/branches/tags
+    runs-on: ubuntu-latest
+    outputs:
+      source_repo: ${{ steps.detect.outputs.source_repo }}
+    steps:
+      - name: Checkout this repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Detect upstream repository from fork parent
+        id: detect
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          INFO=$(curl -sf -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}")
+
+          IS_FORK=$(jq -r '.fork' <<<"$INFO")
+          if [ "$IS_FORK" != "true" ]; then
+            echo "::error::${GITHUB_REPOSITORY} is not a fork, so the upstream project can't be auto-detected. Fork the target project on GitHub first (so this repo has a recorded parent), then re-run this workflow from the fork."
+            exit 1
+          fi
+
+          SRC=$(jq -r '.parent.full_name // empty' <<<"$INFO")
+          if [ -z "$SRC" ]; then
+            echo "::error::Could not read the parent repository from the GitHub API response."
+            exit 1
+          fi
+
+          echo "Detected upstream: $SRC"
+          echo "source_repo=$SRC" >> "$GITHUB_OUTPUT"
+          echo "SOURCE_REPO=$SRC" >> "$GITHUB_ENV"
+
+      - name: Mirror clone source and push into this repository
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          SRC_URL="https://x-access-token:${GH_TOKEN}@github.com/${SOURCE_REPO}.git"
+          DST_URL="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+
+          # --bare (not --mirror) on purpose: --mirror also fetches GitHub's
+          # internal pull-request refs (refs/pull/*), which cannot be pushed
+          # to the destination and would make git push fail on those refs.
+          git clone --bare "$SRC_URL" source.git
+          cd source.git
+
+          git lfs fetch --all || true
+
+          set +e
+          PUSH_LOG=$(git push --mirror "$DST_URL" 2>&1)
+          PUSH_EXIT=$?
+          set -e
+          echo "$PUSH_LOG"
+
+          if [ "$PUSH_EXIT" -ne 0 ]; then
+            REJECTED=$(grep -c '\[remote rejected\]' <<<"$PUSH_LOG" || true)
+            WORKFLOW_REJECTED=$(grep -c 'create or update workflow' <<<"$PUSH_LOG" || true)
+            if [ "$REJECTED" -gt 0 ] && [ "$REJECTED" -eq "$WORKFLOW_REJECTED" ]; then
+              echo "::warning::${WORKFLOW_REJECTED} ref(s) were skipped because their commits modify .github/workflows files, which GITHUB_TOKEN cannot push. Everything else synced normally. Add a classic PAT with the workflow scope as a GH_PAT secret to also mirror these specific refs."
+            else
+              echo "::error::git push --mirror failed for a reason other than the known workflows-permission restriction. See the log above."
+              exit 1
+            fi
+          fi
+
+          git lfs push --all "$DST_URL" || true
+
+      - name: Restore fork-only workflow files removed by the mirror
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+
+          FORK_ONLY=""
+          if [ -d "$GITHUB_WORKSPACE/.github/workflows" ]; then
+            for f in "$GITHUB_WORKSPACE"/.github/workflows/*; do
+              [ -f "$f" ] || continue
+              bn=$(basename "$f")
+              if ! git -C source.git cat-file -e "HEAD:.github/workflows/$bn" 2>/dev/null; then
+                FORK_ONLY="$FORK_ONLY $bn"
+              fi
+            done
+          fi
+
+          if [ -z "$FORK_ONLY" ]; then
+            echo "No fork-only workflow files to restore."
+            exit 0
+          fi
+
+          echo "Fork-only workflow file(s) removed by the mirror because upstream does not have them:$FORK_ONLY"
+
+          if [ -z "${GH_PAT:-}" ]; then
+            echo "::error::These files (including this sync workflow itself) were just removed by the mirror and cannot be restored: putting them back means pushing a change under .github/workflows/, which GITHUB_TOKEN is never allowed to do under any permission setting. Add a repository secret named GH_PAT (a classic PAT with the 'workflow' scope) so this step can restore them automatically on every run. Without it, this file will keep disappearing and scheduled runs will stop firing once it does, since GitHub reads schedule triggers from the file on the default branch."
+            exit 1
+          fi
+
+          rm -rf restore-tmp
+          git clone --depth 1 "https://x-access-token:${GH_PAT}@github.com/${GITHUB_REPOSITORY}.git" restore-tmp
+          cd restore-tmp
+          mkdir -p .github/workflows
+          for bn in $FORK_ONLY; do
+            cp "$GITHUB_WORKSPACE/.github/workflows/$bn" ".github/workflows/$bn"
+          done
+
+          if [ -n "$(git status --porcelain .github/workflows)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add .github/workflows
+            git commit -m "Restore fork-only workflow files removed by upstream mirror"
+            git push origin HEAD
+            echo "Restored:$FORK_ONLY"
+          else
+            echo "Already present after mirror, nothing to restore."
+          fi
+
+  sync-releases:
+    name: Sync releases & assets
+    needs: sync-code
+    runs-on: ubuntu-latest
+    env:
+      SOURCE_REPO: ${{ needs.sync-code.outputs.source_repo }}
+      GH_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Sync all releases with their assets
+        run: |
+          set -euo pipefail
+
+          DEST_REPO="$GITHUB_REPOSITORY"
+
+          TAGS=$(gh api --paginate "repos/${SOURCE_REPO}/releases" --jq '.[].tag_name')
+
+          if [ -z "$TAGS" ]; then
+            echo "No releases found upstream."
+            exit 0
+          fi
+
+          while IFS= read -r TAG; do
+            [ -z "$TAG" ] && continue
+            echo "== Release: $TAG =="
+
+            if gh release view "$TAG" -R "$DEST_REPO" >/dev/null 2>&1; then
+              echo "Already exists in destination, skipping."
+              continue
+            fi
+
+            FAILED=0
+            NOTES_FILE=""
+            ASSET_DIR=""
+
+            JSON=$(gh api "repos/${SOURCE_REPO}/releases/tags/$TAG") || FAILED=1
+
+            if [ "$FAILED" -eq 0 ]; then
+              NAME=$(jq -r '.name // .tag_name' <<<"$JSON")
+              DRAFT=$(jq -r '.draft' <<<"$JSON")
+              PRERELEASE=$(jq -r '.prerelease' <<<"$JSON")
+              NOTES_FILE=$(mktemp)
+              jq -r '.body // ""' <<<"$JSON" > "$NOTES_FILE"
+
+              ASSET_DIR=$(mktemp -d)
+              ASSET_COUNT=$(jq -r '.assets | length' <<<"$JSON")
+              if [ "$ASSET_COUNT" -gt 0 ]; then
+                gh release download "$TAG" -R "$SOURCE_REPO" -D "$ASSET_DIR" --clobber || FAILED=1
+              fi
+            fi
+
+            if [ "$FAILED" -eq 0 ]; then
+              # No --target here on purpose: the tag already exists in this
+              # repo (pushed by the sync-code job), so it is not needed, and
+              # passing it (especially as a raw commit SHA rather than a
+              # branch name, which is common for older releases) is a known
+              # cause of "HTTP 403: Resource not accessible by integration"
+              # with GITHUB_TOKEN even with contents: write granted.
+              ARGS=(--title "$NAME" --notes-file "$NOTES_FILE")
+              [ "$DRAFT" = "true" ] && ARGS+=(--draft)
+              [ "$PRERELEASE" = "true" ] && ARGS+=(--prerelease)
+
+              if [ "$(find "$ASSET_DIR" -type f | wc -l)" -gt 0 ]; then
+                gh release create "$TAG" "$ASSET_DIR"/* -R "$DEST_REPO" "${ARGS[@]}" || FAILED=1
+              else
+                gh release create "$TAG" -R "$DEST_REPO" "${ARGS[@]}" || FAILED=1
+              fi
+            fi
+
+            if [ "$FAILED" -eq 0 ]; then
+              echo "Release $TAG synced."
+            else
+              echo "::warning::Failed to sync release $TAG, skipping it and continuing with the rest (see the log above this line for the specific error)."
+            fi
+
+            [ -n "$NOTES_FILE" ] && rm -rf "$NOTES_FILE"
+            [ -n "$ASSET_DIR" ] && rm -rf "$ASSET_DIR"
+          done <<< "$TAGS"
+
+  sync-packages:
+    name: Sync container packages (Docker)
+    needs: sync-code
+    runs-on: ubuntu-latest
+    env:
+      SOURCE_REPO: ${{ needs.sync-code.outputs.source_repo }}
+    steps:
+      - name: Install skopeo
+        run: |
+          sudo apt-get update -qq || true
+          sudo apt-get install -y skopeo
+
+      - name: Sync all container images
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          DST_USER="$GITHUB_ACTOR"
+          SOURCE_OWNER="${SOURCE_REPO%%/*}"
+          DEST_OWNER="${GITHUB_REPOSITORY%%/*}"
+
+          OWNER_TYPE=$(curl -s -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/users/${SOURCE_OWNER}" | jq -r '.type // empty')
+
+          if [ "$OWNER_TYPE" = "Organization" ]; then
+            PKG_LIST_URL="https://api.github.com/orgs/${SOURCE_OWNER}/packages?package_type=container&per_page=100"
+            VER_BASE="https://api.github.com/orgs/${SOURCE_OWNER}/packages/container"
+          else
+            PKG_LIST_URL="https://api.github.com/users/${SOURCE_OWNER}/packages?package_type=container&per_page=100"
+            VER_BASE="https://api.github.com/users/${SOURCE_OWNER}/packages/container"
+          fi
+
+          PACKAGES_JSON=$(curl -s -H "Authorization: Bearer $GH_TOKEN" "$PKG_LIST_URL")
+          IS_ARRAY=$(jq -r 'if type == "array" then "yes" else "no" end' <<<"$PACKAGES_JSON" 2>/dev/null || echo "no")
+
+          if [ "$IS_ARRAY" != "yes" ]; then
+            echo "::warning::Could not list container packages for ${SOURCE_OWNER}. GITHUB_TOKEN generally cannot read another repository's package list, even when public. Add a repository secret named GH_PAT (classic PAT with read:packages) to enable this job; everything else (code, branches, tags, releases) syncs fine without it."
+            exit 0
+          fi
+
+          PKG_NAMES=$(jq -r --arg REPO "$SOURCE_REPO" \
+            '.[] | select(.repository.full_name == $REPO) | .name' <<<"$PACKAGES_JSON")
+
+          if [ -z "$PKG_NAMES" ]; then
+            echo "No container packages found for ${SOURCE_REPO}."
+            exit 0
+          fi
+
+          while IFS= read -r PKG; do
+            [ -z "$PKG" ] && continue
+            echo "== Package: $PKG =="
+
+            VERSIONS_JSON=$(curl -s -H "Authorization: Bearer $GH_TOKEN" \
+              "${VER_BASE}/${PKG}/versions?per_page=100")
+            TAGS=$(jq -r 'if type == "array" then (.[]?.metadata.container.tags[]?) else empty end' <<<"$VERSIONS_JSON" | sort -u)
+
+            if [ -z "$TAGS" ]; then
+              echo "No tags found for $PKG, skipping."
+              continue
+            fi
+
+            while IFS= read -r TAG; do
+              [ -z "$TAG" ] && continue
+              echo "-> copying $PKG:$TAG"
+              skopeo copy --all \
+                --src-creds "x-access-token:${GH_TOKEN}" \
+                --dest-creds "${DST_USER}:${GH_TOKEN}" \
+                "docker://ghcr.io/${SOURCE_OWNER}/${PKG}:${TAG}" \
+                "docker://ghcr.io/${DEST_OWNER}/${PKG}:${TAG}" \
+                || echo "!! failed to copy $PKG:$TAG, continuing"
+            done <<< "$TAGS"
+          done <<< "$PKG_NAMES"
+
+  sync-wiki:
+    name: Sync wiki
+    needs: sync-code
+    runs-on: ubuntu-latest
+    env:
+      SOURCE_REPO: ${{ needs.sync-code.outputs.source_repo }}
+    steps:
+      - name: Mirror wiki if it exists upstream
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+          GH_PAT: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+
+          SRC_WIKI_URL="https://x-access-token:${GH_TOKEN}@github.com/${SOURCE_REPO}.wiki.git"
+
+          rm -rf wiki-source.git
+          if ! git clone --bare "$SRC_WIKI_URL" wiki-source.git 2>wiki-clone.log; then
+            echo "Upstream wiki not accessible (likely disabled, or has no pages yet), nothing to sync. Details:"
+            cat wiki-clone.log
+            exit 0
+          fi
+
+          # GITHUB_TOKEN cannot authenticate against wiki git repositories at
+          # all (a GitHub platform limitation, unrelated to the permissions
+          # block above), so pushing the destination side always needs the
+          # classic PAT specifically, even though reading upstream above
+          # could fall back to GITHUB_TOKEN for public wikis.
+          if [ -z "${GH_PAT:-}" ]; then
+            echo "::warning::Upstream has a wiki, but it can't be pushed here: the built-in GITHUB_TOKEN cannot authenticate against wiki git repositories, only a classic PAT can. The GH_PAT secret used elsewhere in this workflow (with the 'repo' scope) also covers this, so add it if you haven't."
+            exit 0
+          fi
+
+          DST_WIKI_URL="https://x-access-token:${GH_PAT}@github.com/${GITHUB_REPOSITORY}.wiki.git"
+
+          cd wiki-source.git
+
+          set +e
+          PUSH_LOG=$(git push --mirror "$DST_WIKI_URL" 2>&1)
+          PUSH_EXIT=$?
+          set -e
+          echo "$PUSH_LOG"
+
+          if [ "$PUSH_EXIT" -ne 0 ]; then
+            echo "::warning::Failed to push to this repository's wiki. Make sure the Wiki feature is enabled in this repo's Settings (under Features), then re-run this workflow. See the log above for the specific error."
+            exit 0
+          fi
+
+          echo "Wiki synced."
