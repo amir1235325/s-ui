@@ -114,16 +114,25 @@ func addTls(out *map[string]interface{}, tls *model.Tls) {
 	if handshakeTimeout, ok := tlsServer["handshake_timeout"]; ok {
 		tlsConfig["handshake_timeout"] = handshakeTimeout
 	}
-	if reality, ok := tlsServer["reality"].(map[string]interface{}); ok && reality["enabled"].(bool) {
-		realityConfig := tlsConfig["reality"].(map[string]interface{})
+	// Comma-ok on enabled and on the target map. Both were bare assertions, so
+	// a TLS record written before reality existed -- or one whose enabled flag
+	// came back as a string -- panicked while building a client config.
+	if reality, ok := tlsServer["reality"].(map[string]interface{}); ok && boolOr(reality["enabled"]) {
+		realityConfig, ok := tlsConfig["reality"].(map[string]interface{})
+		if !ok {
+			realityConfig = map[string]interface{}{}
+		}
 		realityConfig["enabled"] = true
 		if shortIDs, ok := reality["short_id"].([]interface{}); ok && len(shortIDs) > 0 {
 			realityConfig["short_id"] = shortIDs[common.RandomInt(len(shortIDs))]
 		}
 		tlsConfig["reality"] = realityConfig
 	}
-	if ech, ok := tlsServer["ech"].(map[string]interface{}); ok && ech["enabled"].(bool) {
-		echConfig := tlsConfig["ech"].(map[string]interface{})
+	if ech, ok := tlsServer["ech"].(map[string]interface{}); ok && boolOr(ech["enabled"]) {
+		echConfig, ok := tlsConfig["ech"].(map[string]interface{})
+		if !ok {
+			echConfig = map[string]interface{}{}
+		}
 		echConfig["enabled"] = true
 		echConfig["pq_signature_schemes_enabled"] = ech["pq_signature_schemes_enabled"]
 		echConfig["dynamic_record_sizing_disabled"] = ech["dynamic_record_sizing_disabled"]

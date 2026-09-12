@@ -61,6 +61,11 @@ d en initializing "Initializing, please wait..."
 d en ask_admin "Do you want to change admin credentials [y/n]? "
 d en set_user "Please set up your username: "
 d en set_pass "Please set up your password: "
+d en checksum_ok "Checksum verified."
+d en checksum_fail "Checksum does NOT match. The download may be corrupt or tampered with. Aborting."
+d en no_checksums "No SHA256SUMS published for this release; skipping checksum verification."
+d en creds_empty "Username and password can not be empty."
+d en creds_failed "Failed to set the admin credentials."
 d en current_creds "Your current admin credentials:"
 d en cancelled "cancel..."
 d en fresh_random "this is a fresh installation, will generate random login info for security concerns:"
@@ -95,6 +100,11 @@ d fa initializing "در حال آماده سازی، لطفاً صبر کنید.
 d fa ask_admin "آیا می خواهید نام کاربری و رمز ادمین را تغییر دهید [y/n]؟ "
 d fa set_user "نام کاربری خود را وارد کنید: "
 d fa set_pass "رمز عبور خود را وارد کنید: "
+d fa checksum_ok "صحت فایل تایید شد."
+d fa checksum_fail "مقدار checksum مطابقت ندارد. فایل دانلودشده خراب یا دستکاری شده است. عملیات متوقف شد."
+d fa no_checksums "برای این نسخه فایل SHA256SUMS منتشر نشده؛ بررسی checksum انجام نشد."
+d fa creds_empty "نام کاربری و رمز عبور نمی‌توانند خالی باشند."
+d fa creds_failed "تنظیم نام کاربری و رمز ادمین ناموفق بود."
 d fa current_creds "اطلاعات ورود ادمین فعلی شما:"
 d fa cancelled "لغو شد..."
 d fa fresh_random "این یک نصب تازه است؛ برای امنیت، اطلاعات ورود تصادفی ساخته می شود:"
@@ -129,6 +139,11 @@ d ru initializing "Инициализация, пожалуйста, подож�
 d ru ask_admin "Хотите изменить учётные данные администратора [y/n]? "
 d ru set_user "Задайте имя пользователя: "
 d ru set_pass "Задайте пароль: "
+d ru checksum_ok "Контрольная сумма проверена."
+d ru checksum_fail "Контрольная сумма не совпадает. Файл повреждён или подменён. Прерывание."
+d ru no_checksums "Для этого релиза нет SHA256SUMS; проверка контрольной суммы пропущена."
+d ru creds_empty "Имя пользователя и пароль не могут быть пустыми."
+d ru creds_failed "Не удалось задать учётные данные администратора."
 d ru current_creds "Ваши текущие учётные данные администратора:"
 d ru cancelled "отмена..."
 d ru fresh_random "это новая установка, в целях безопасности будут сгенерированы случайные данные для входа:"
@@ -163,6 +178,11 @@ d vi initializing "Đang khởi tạo, vui lòng đợi..."
 d vi ask_admin "Bạn có muốn thay đổi thông tin đăng nhập quản trị [y/n]? "
 d vi set_user "Vui lòng đặt tên người dùng: "
 d vi set_pass "Vui lòng đặt mật khẩu: "
+d vi checksum_ok "Đã xác minh checksum."
+d vi checksum_fail "Checksum KHÔNG khớp. Tệp tải về có thể bị hỏng hoặc bị can thiệp. Đang hủy."
+d vi no_checksums "Bản phát hành này không có SHA256SUMS; bỏ qua xác minh checksum."
+d vi creds_empty "Tên đăng nhập và mật khẩu không được để trống."
+d vi creds_failed "Không thể đặt thông tin đăng nhập quản trị."
 d vi current_creds "Thông tin đăng nhập quản trị hiện tại của bạn:"
 d vi cancelled "đã hủy..."
 d vi fresh_random "đây là cài đặt mới, sẽ tạo thông tin đăng nhập ngẫu nhiên vì lý do bảo mật:"
@@ -197,6 +217,11 @@ d zhcn initializing "正在初始化，请稍候..."
 d zhcn ask_admin "是否修改管理员账号密码 [y/n]？ "
 d zhcn set_user "请设置您的用户名： "
 d zhcn set_pass "请设置您的密码： "
+d zhcn checksum_ok "校验和已验证。"
+d zhcn checksum_fail "校验和不匹配，下载文件可能已损坏或被篡改。已中止。"
+d zhcn no_checksums "此版本未发布 SHA256SUMS，已跳过校验和验证。"
+d zhcn creds_empty "用户名和密码不能为空。"
+d zhcn creds_failed "设置管理员账号密码失败。"
 d zhcn current_creds "您当前的管理员登录信息："
 d zhcn cancelled "已取消..."
 d zhcn fresh_random "这是全新安装，为了安全将生成随机登录信息："
@@ -231,6 +256,11 @@ d zhtw initializing "正在初始化，請稍候..."
 d zhtw ask_admin "是否修改管理員帳號密碼 [y/n]？ "
 d zhtw set_user "請設定您的使用者名稱： "
 d zhtw set_pass "請設定您的密碼： "
+d zhtw checksum_ok "校驗和已驗證。"
+d zhtw checksum_fail "校驗和不相符，下載檔案可能已損毀或被竄改。已中止。"
+d zhtw no_checksums "此版本未發布 SHA256SUMS，已略過校驗和驗證。"
+d zhtw creds_empty "使用者名稱與密碼不能為空。"
+d zhtw creds_failed "設定管理員帳號密碼失敗。"
 d zhtw current_creds "您目前的管理員登入資訊："
 d zhtw cancelled "已取消..."
 d zhtw fresh_random "這是全新安裝，為了安全將產生隨機登入資訊："
@@ -356,37 +386,50 @@ config_after_install() {
     /usr/local/s-ui/sui migrate
 
     echo -e "${yellow}$(t finished_modify)${plain}"
-    read -p "$(t ask_modify)" config_confirm
+    read -r -p "$(t ask_modify)" config_confirm
     if [[ "${config_confirm}" == "y" || "${config_confirm}" == "Y" ]]; then
         echo -e "${yellow}$(t enter_port)${plain}"
-        read config_port
+        read -r config_port
         echo -e "${yellow}$(t enter_path)${plain}"
-        read config_path
+        read -r config_path
 
         # Sub configuration
         echo -e "${yellow}$(t enter_subport)${plain}"
-        read config_subPort
+        read -r config_subPort
         echo -e "${yellow}$(t enter_subpath)${plain}"
-        read config_subPath
+        read -r config_subPath
 
         # Set configs
         echo -e "${yellow}$(t initializing)${plain}"
-        params=""
-        [ -z "$config_port" ] || params="$params -port $config_port"
-        [ -z "$config_path" ] || params="$params -path $config_path"
-        [ -z "$config_subPort" ] || params="$params -subPort $config_subPort"
-        [ -z "$config_subPath" ] || params="$params -subPath $config_subPath"
-        /usr/local/s-ui/sui setting ${params}
+        params=()
+        [ -z "$config_port" ] || params+=(-port "$config_port")
+        [ -z "$config_path" ] || params+=(-path "$config_path")
+        [ -z "$config_subPort" ] || params+=(-subPort "$config_subPort")
+        [ -z "$config_subPath" ] || params+=(-subPath "$config_subPath")
+        /usr/local/s-ui/sui setting "${params[@]}"
 
-        read -p "$(t ask_admin)" admin_confirm
+        read -r -p "$(t ask_admin)" admin_confirm
         if [[ "${admin_confirm}" == "y" || "${admin_confirm}" == "Y" ]]; then
-            # First admin credentials
-            read -p "$(t set_user)" config_account
-            read -p "$(t set_pass)" config_password
+            # First admin credentials. -s so the password does not end up on
+            # screen or in the scrollback of a shared terminal.
+            read -r -p "$(t set_user)" config_account
+            read -r -s -p "$(t set_pass)" config_password
+            echo
+
+            # Both have to be non-empty. Passing an empty -password used to
+            # store the hash of "", which authenticates anyone who submits an
+            # empty password.
+            if [[ -z "$config_account" || -z "$config_password" ]]; then
+                echo -e "${red}$(t creds_empty)${plain}"
+                exit 1
+            fi
 
             # Set credentials
             echo -e "${yellow}$(t initializing)${plain}"
-            /usr/local/s-ui/sui admin -username ${config_account} -password ${config_password}
+            if ! /usr/local/s-ui/sui admin -username "${config_account}" -password "${config_password}"; then
+                echo -e "${red}$(t creds_failed)${plain}"
+                exit 1
+            fi
         else
             echo -e "${yellow}$(t current_creds)${plain}"
             /usr/local/s-ui/sui admin -show
@@ -402,7 +445,10 @@ config_after_install() {
             echo -e "${green}password:${passwordTemp}${plain}"
             echo -e "###############################################"
             echo -e "${red}$(t forgot_info)${plain}"
-            /usr/local/s-ui/sui admin -username ${usernameTemp} -password ${passwordTemp}
+            if ! /usr/local/s-ui/sui admin -username "${usernameTemp}" -password "${passwordTemp}"; then
+                echo -e "${red}$(t creds_failed)${plain}"
+                exit 1
+            fi
         else
             echo -e "${red}$(t upgrade_keep)${plain}"
         fi
@@ -427,8 +473,47 @@ prepare_services() {
     fi
 }
 
+# verify_checksum checks the downloaded archive against the SHA256SUMS file the
+# release publishes. A release without one (anything built before this was
+# added) is installed with a warning rather than refused, so an older version
+# can still be rolled back to.
+verify_checksum() {
+    local archive="$1" sums="$2" name expected actual
+    name=$(basename "$archive")
+
+    if [[ ! -s "$sums" ]] || ! command -v sha256sum >/dev/null 2>&1; then
+        echo -e "${yellow}$(t no_checksums)${plain}"
+        return 0
+    fi
+
+    # Matched by filename, and the leading * that sha256sum writes for a binary
+    # entry is accepted. Comparing the hashes directly rather than piping into
+    # `sha256sum -c` keeps this independent of the working directory, which the
+    # paths in a SHA256SUMS file are relative to.
+    expected=$(awk -v f="$name" '$2 == f || $2 == "*" f { print $1; exit }' "$sums")
+    if [[ -z "$expected" ]]; then
+        echo -e "${yellow}$(t no_checksums)${plain}"
+        return 0
+    fi
+
+    actual=$(sha256sum "$archive" | awk '{ print $1 }')
+    if [[ "$expected" != "$actual" ]]; then
+        echo -e "${red}$(t checksum_fail)${plain}"
+        return 1
+    fi
+    echo -e "${green}$(t checksum_ok)${plain}"
+}
+
 install_s-ui() {
-    cd /tmp/
+    # A private directory, not /tmp itself. The old path was predictable, so on
+    # a shared host another user could pre-create the archive or the extracted
+    # tree and have root install it.
+    workdir=$(mktemp -d "${TMPDIR:-/tmp}/s-ui-install.XXXXXXXX") || exit 1
+    trap 'rm -rf "$workdir"' EXIT
+    cd "$workdir" || exit 1
+
+    local archive="$workdir/s-ui-linux-$(arch).tar.gz"
+    local sums="$workdir/SHA256SUMS"
 
     if [ $# == 0 ]; then
         last_version=$(curl -Ls "https://api.github.com/repos/alireza0/s-ui/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
@@ -437,21 +522,25 @@ install_s-ui() {
             exit 1
         fi
         printf "${green}$(t got_version)${plain}\n" "${last_version}"
-        wget -N --no-check-certificate -O /tmp/s-ui-linux-$(arch).tar.gz https://github.com/alireza0/s-ui/releases/download/${last_version}/s-ui-linux-$(arch).tar.gz
-        if [[ $? -ne 0 ]]; then
-            echo -e "${red}$(t download_fail)${plain}"
-            exit 1
-        fi
     else
         last_version=$1
-        url="https://github.com/alireza0/s-ui/releases/download/${last_version}/s-ui-linux-$(arch).tar.gz"
         printf "$(t begin_install)\n" "$1"
-        wget -N --no-check-certificate -O /tmp/s-ui-linux-$(arch).tar.gz ${url}
-        if [[ $? -ne 0 ]]; then
-            printf "${red}$(t download_ver_fail)${plain}\n" "$1"
-            exit 1
-        fi
     fi
+
+    # No --no-check-certificate. It was on every download here, which turns the
+    # whole install into an unauthenticated fetch: anyone able to intercept it
+    # chooses the binary that then runs as root.
+    local base="https://github.com/alireza0/s-ui/releases/download/${last_version}"
+    if ! wget -q --show-progress -O "$archive" "${base}/s-ui-linux-$(arch).tar.gz"; then
+        if [ $# == 0 ]; then
+            echo -e "${red}$(t download_fail)${plain}"
+        else
+            printf "${red}$(t download_ver_fail)${plain}\n" "$1"
+        fi
+        exit 1
+    fi
+    wget -q -O "$sums" "${base}/SHA256SUMS" 2>/dev/null || : # older releases have none
+    verify_checksum "$archive" "$sums" || exit 1
 
     if [[ -e /usr/local/s-ui/ ]]; then
         if [[ "${init_system}" == "systemd" ]]; then
@@ -461,13 +550,12 @@ install_s-ui() {
         fi
     fi
 
-    if ! tar zxvf s-ui-linux-$(arch).tar.gz; then
+    if ! tar zxf "$archive" -C "$workdir"; then
         echo -e "${red}$(t extract_fail)${plain}"
-        df -h /tmp /usr/local 2>/dev/null
-        rm -rf s-ui s-ui-linux-$(arch).tar.gz
+        df -h "$workdir" /usr/local 2>/dev/null
         exit 1
     fi
-    rm s-ui-linux-$(arch).tar.gz -f
+    rm -f "$archive"
 
     chmod +x s-ui/sui s-ui/s-ui.sh
     cp s-ui/s-ui.sh /usr/bin/s-ui

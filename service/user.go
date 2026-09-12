@@ -53,10 +53,22 @@ func (s *UserService) UpdateFirstUser(username string, password string) error {
 }
 
 func (s *UserService) Login(username string, password string, remoteIP string) (string, error) {
+	if locked, remaining := LoginLockedOut(remoteIP); locked {
+		logger.Warning("login refused, too many failures from ", remoteIP)
+		return "", common.NewErrorf("too many failed attempts, try again in %d minute(s)",
+			int(remaining.Minutes())+1)
+	}
+
 	user := s.CheckUser(username, password, remoteIP)
 	if user == nil {
+		if NoteLoginFailure(remoteIP) {
+			logger.Warning("login locked out for ", remoteIP, " after ", maxLoginFailures, " failed attempts")
+		}
+		// The message stays the same whether the user exists or not.
 		return "", common.NewError("wrong user or password! IP: ", remoteIP)
 	}
+
+	NoteLoginSuccess(remoteIP)
 	return user.Username, nil
 }
 
@@ -69,6 +81,9 @@ func (s *UserService) CheckUser(username string, password string, remoteIP strin
 		First(user).
 		Error
 	if database.IsNotFound(err) {
+		// Same work as a real check, so an unknown username cannot be told
+		// apart from a known one by how long the answer takes.
+		util.BurnPasswordCheck(password)
 		return nil
 	} else if err != nil {
 		logger.Warning("check user err:", err, " IP: ", remoteIP)
@@ -109,11 +124,29 @@ func (s *UserService) GetUsers() (*[]model.User, error) {
 	return &users, nil
 }
 
-func (s *UserService) ChangePass(id string, oldPass string, newUser string, newPass string) error {
+// ChangePass rewrites the credentials of the logged-in user.
+//
+// It takes the username from the session rather than an id from the form. The
+// id used to come straight from the request, so any authenticated user could
+// rewrite the credentials of any other account by posting a different number,
+// and with a single-admin panel that means taking the panel over.
+func (s *UserService) ChangePass(loginUser string, oldPass string, newUser string, newPass string) error {
+	if loginUser == "" {
+		return common.NewError("not logged in")
+	}
+	if newUser == "" {
+		return common.NewError("username can not be empty")
+	}
+	if newPass == "" {
+		// Left unchecked, this stored a bcrypt hash of "" and the panel
+		// authenticated anyone who submitted an empty password.
+		return common.NewError("password can not be empty")
+	}
+
 	db := database.GetDB()
 	user := &model.User{}
-	err := db.Model(model.User{}).Where("id = ?", id).First(user).Error
-	if err != nil || database.IsNotFound(err) {
+	err := db.Model(model.User{}).Where("username = ?", loginUser).First(user).Error
+	if err != nil {
 		return err
 	}
 	if !util.CheckPassword(oldPass, user.Password) {
@@ -181,7 +214,21 @@ func (s *UserService) AddToken(username string, expiry int64, desc string) (stri
 	return token.Token, nil
 }
 
-func (s *UserService) DeleteToken(id string) error {
+// DeleteToken removes one of the caller's own API tokens. The owner check is
+// the point: the id came from the form with no constraint, so any logged-in
+// user could revoke any other user's tokens by counting upwards.
+func (s *UserService) DeleteToken(loginUser string, id string) error {
+	if loginUser == "" {
+		return common.NewError("not logged in")
+	}
 	db := database.GetDB()
-	return db.Model(model.Tokens{}).Where("id = ?", id).Delete(&model.Tokens{}).Error
+	res := db.Where("id = ? AND user_id = (select id from users where username = ?)", id, loginUser).
+		Delete(&model.Tokens{})
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return common.NewError("no such token")
+	}
+	return nil
 }

@@ -118,7 +118,7 @@ custom_version() {
     exit 1
     fi
 
-    download_link="https://raw.githubusercontent.com/alireza0/s-ui/master/install.sh"
+    download_link="https://raw.githubusercontent.com/alireza0/s-ui/main/install.sh"
 
     install_command="bash <(curl -Ls $download_link) $panel_version"
 
@@ -321,7 +321,9 @@ show_log() {
 }
 
 update_shell() {
-    wget -O /usr/bin/s-ui -N --no-check-certificate https://github.com/alireza0/s-ui/raw/main/s-ui.sh
+    # Certificate verification stays on: this file is about to be installed as
+    # /usr/bin/s-ui and run as root.
+    wget -O /usr/bin/s-ui -N https://github.com/alireza0/s-ui/raw/main/s-ui.sh
     if [[ $? != 0 ]]; then
         echo ""
         LOGE "Failed to download script, Please check whether the machine can connect Github"
@@ -525,6 +527,17 @@ install_acme() {
     return 0
 }
 
+# secure_cert_files makes a certificate directory readable by its owner only.
+# These files were chmod 755, which left the private key world readable on a
+# multi-user host -- anyone able to read it can impersonate the panel.
+secure_cert_files() {
+    local dir="$1"
+    [ -n "$dir" ] && [ -d "$dir" ] || return 0
+    chmod 700 "$dir"
+    find "$dir" -type f -name '*.pem' -exec chmod 600 {} +
+    find "$dir" -type f ! -name '*.pem' -exec chmod 644 {} +
+}
+
 ssl_cert_issue_main() {
     echo -e "${green}\t1.${plain} Get SSL"
     echo -e "${green}\t2.${plain} Revoke"
@@ -610,16 +623,21 @@ ssl_cert_issue() {
     fi
 
     local WebPort=80
-    read -p "please choose which port do you use,default will be 80 port:" WebPort
-    if [[ ${WebPort} -gt 65535 || ${WebPort} -lt 1 ]]; then
+    read -r -p "please choose which port do you use,default will be 80 port:" WebPort
+    # A non-numeric answer used to make the arithmetic comparison an error and
+    # then be passed to acme.sh anyway. Anything that is not a port falls back.
+    if ! [[ "${WebPort}" =~ ^[0-9]+$ ]] || [ "${WebPort}" -lt 1 ] || [ "${WebPort}" -gt 65535 ]; then
         LOGE "your input ${WebPort} is invalid,will use default port"
+        WebPort=80
     fi
     LOGI "will use port:${WebPort} to issue certs,please make sure this port is open..."
     ~/.acme.sh/acme.sh --set-default-ca --server letsencrypt
     ~/.acme.sh/acme.sh --issue -d ${domain} --standalone --httpport ${WebPort}
     if [ $? -ne 0 ]; then
         LOGE "issue certs failed,please check logs"
-        rm -rf ~/.acme.sh/${domain}
+        # Guarded: with domain empty this expanded to ~/.acme.sh/ and took the
+        # whole acme.sh installation, including every other certificate.
+        [ -n "${domain}" ] && rm -rf ~/.acme.sh/"${domain}"
         exit 1
     else
         LOGE "issue certs succeed,installing certs..."
@@ -630,7 +648,7 @@ ssl_cert_issue() {
 
     if [ $? -ne 0 ]; then
         LOGE "install certs failed,exit"
-        rm -rf ~/.acme.sh/${domain}
+        [ -n "${domain}" ] && rm -rf ~/.acme.sh/"${domain}"
         exit 1
     else
         LOGI "install certs succeed,enable auto renew..."
@@ -640,12 +658,12 @@ ssl_cert_issue() {
     if [ $? -ne 0 ]; then
         LOGE "auto renew failed, certs details:"
         ls -lah cert/*
-        chmod 755 $certPath/*
+        secure_cert_files "$certPath"
         exit 1
     else
         LOGI "auto renew succeed, certs details:"
         ls -lah cert/*
-        chmod 755 $certPath/*
+        secure_cert_files "$certPath"
     fi
 }
 
@@ -792,7 +810,7 @@ ssl_cert_issue_CF() {
                 else
                     LOGI "The certificate is installed and auto-renewal is turned on."
                     ls -lah ${certPath}/${CF_Domain}
-                    chmod 755 ${certPath}/${CF_Domain}
+                    secure_cert_files "${certPath}/${CF_Domain}"
                 fi
             fi
             show_menu

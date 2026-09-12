@@ -25,6 +25,7 @@ func ParseCmd() {
 	var subPort int
 	var subPath string
 	var reset bool
+	var assumeYes bool
 	var show bool
 	var output string
 	var exclude string
@@ -39,6 +40,7 @@ func ParseCmd() {
 
 	adminCmd.BoolVar(&show, "show", false, "show first admin credentials")
 	adminCmd.BoolVar(&reset, "reset", false, "reset first admin credentials")
+	adminCmd.BoolVar(&assumeYes, "yes", false, "skip the confirmation prompt for -reset")
 	adminCmd.StringVar(&username, "username", "", "set login username")
 	adminCmd.StringVar(&password, "password", "", "set login password")
 
@@ -51,6 +53,7 @@ func ParseCmd() {
 		fmt.Println("    uri            Show panel URI")
 		fmt.Println("    migrate        migrate form older version")
 		fmt.Println("    setting        set/reset/show settings")
+		fmt.Println("    healthcheck    exit 0 if the panel is listening on its configured port")
 		fmt.Println("    backup         create a database backup")
 		fmt.Println()
 		adminCmd.Usage()
@@ -86,7 +89,7 @@ func ParseCmd() {
 		case show:
 			showAdmin()
 		case reset:
-			resetAdmin()
+			resetAdmin(assumeYes)
 		default:
 			updateAdmin(username, password)
 			showAdmin()
@@ -94,6 +97,9 @@ func ParseCmd() {
 
 	case "uri":
 		getPanelURI()
+
+	case "healthcheck":
+		healthCheck()
 
 	case "migrate":
 		if err := migration.MigrateDb(); err != nil {

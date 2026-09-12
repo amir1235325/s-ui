@@ -104,10 +104,15 @@ func GetTlsPing(domain string, port string) (any, error) {
 	}
 
 	d := net.Dialer{Timeout: 10 * time.Second}
-	tcpConn, err := d.Dial("tcp", domain+":"+port)
+	tcpConn, err := d.Dial("tcp", net.JoinHostPort(domain, port))
 	if err != nil {
 		return "", common.NewErrorf("Failed to dial tcp: %s", err)
 	}
+	// Closed on every path. This is reachable from an admin form, so a domain
+	// that handshakes but serves no usable certificate used to leak a socket
+	// per attempt.
+	defer tcpConn.Close()
+
 	tlsConn := utls.UClient(tcpConn, &utls.Config{
 		InsecureSkipVerify: true,
 		NextProtos:         []string{"h2", "http/1.1"},
@@ -122,6 +127,11 @@ func GetTlsPing(domain string, port string) (any, error) {
 			leaf = cert
 			break
 		}
+	}
+	// A server that presents only certificates without a SAN leaves leaf nil,
+	// and reading through it took the whole panel down from an admin form.
+	if leaf == nil {
+		return "", common.NewErrorf("%s presented no certificate with a subject alternative name", domain)
 	}
 	sum := sha256.Sum256(leaf.RawSubjectPublicKeyInfo)
 	leafObj := map[string]string{

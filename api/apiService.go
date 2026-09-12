@@ -296,22 +296,25 @@ func (a *ApiService) Login(c *gin.Context) {
 		logger.Infof("Unable to get session's max age from DB")
 	}
 
-	err = SetLoginUser(c, loginUser, sessionMaxAge)
-	if err == nil {
-		logger.Info("user ", loginUser, " login success")
-	} else {
-		logger.Warning("login failed: ", err)
+	if err = SetLoginUser(c, loginUser, sessionMaxAge); err != nil {
+		// Reported, not logged and swallowed: the old code answered "success"
+		// with no cookie set, so the panel bounced straight back to the login
+		// form with nothing to explain why.
+		logger.Warning("login failed to start a session: ", err)
+		jsonMsg(c, "", err)
+		return
 	}
+	logger.Info("user ", loginUser, " login success")
 
 	jsonMsg(c, "", nil)
 }
 
 func (a *ApiService) ChangePass(c *gin.Context) {
-	id := c.Request.FormValue("id")
+	loginUser := GetLoginUser(c)
 	oldPass := c.Request.FormValue("oldPass")
 	newUsername := c.Request.FormValue("newUsername")
 	newPass := c.Request.FormValue("newPass")
-	err := a.UserService.ChangePass(id, oldPass, newUsername, newPass)
+	err := a.UserService.ChangePass(loginUser, oldPass, newUsername, newPass)
 	if err == nil {
 		logger.Info("change user credentials success")
 		jsonMsg(c, "save", nil)
@@ -426,8 +429,9 @@ func (a *ApiService) AddToken(c *gin.Context) {
 }
 
 func (a *ApiService) DeleteToken(c *gin.Context) {
+	loginUser := GetLoginUser(c)
 	tokenId := c.Request.FormValue("id")
-	err := a.UserService.DeleteToken(tokenId)
+	err := a.UserService.DeleteToken(loginUser, tokenId)
 	jsonMsg(c, "", err)
 }
 

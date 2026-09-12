@@ -62,6 +62,15 @@ const ProxyGroups = `- name: Proxy
   tolerance: 50
 `
 
+// asBool reads a JSON bool without asserting. sing-box options reach here as
+// map[string]interface{} straight from the database, where a key can be absent,
+// null, or a string from an older schema -- and a bare assertion on any of
+// those panics inside the subscription handler.
+func asBool(v interface{}) bool {
+	b, _ := v.(bool)
+	return b
+}
+
 func (s *ClashService) GetClash(subId string) (*string, []string, error) {
 
 	client, inDatas, err := s.getData(subId)
@@ -233,7 +242,10 @@ func (s *ClashService) ConvertToClashMeta(outbounds *[]map[string]interface{}, b
 			}
 
 			// Add reality if exists
-			if reality, ok := tls["reality"].(map[string]interface{}); ok && reality["enabled"].(bool) {
+			// Comma-ok on enabled as well: a config written by hand, or one
+			// carried over from an older schema, can leave the key absent and
+			// the bare assertion took the subscription endpoint down.
+			if reality, ok := tls["reality"].(map[string]interface{}); ok && asBool(reality["enabled"]) {
 				reality_opts := make(map[string]interface{})
 				if pbk, ok := reality["public_key"].(string); ok {
 					reality_opts["public-key"] = pbk
@@ -264,11 +276,16 @@ func (s *ClashService) ConvertToClashMeta(outbounds *[]map[string]interface{}, b
 				proxy["fingerprint"] = fp
 			}
 			// ech outbounds
-			if ech, ok := tls["ech"].(map[string]interface{}); ok && ech["enabled"].(bool) {
+			if ech, ok := tls["ech"].(map[string]interface{}); ok && asBool(ech["enabled"]) {
 				ech_config, _ := ech["config"].([]interface{})
 				ech_string := ""
-				for i := 1; i < len(ech_config)-1; i++ {
-					ech_string += ech_config[i].(string)
+				// The whole config, not [1:len-1]. The loop dropped the first
+				// and last line of every ECH key, so the value Clash received
+				// was never the one that was configured.
+				for _, line := range ech_config {
+					if s, ok := line.(string); ok {
+						ech_string += s
+					}
 				}
 				proxy["ech-opts"] = map[string]interface{}{
 					"enable": true,
@@ -283,12 +300,12 @@ func (s *ClashService) ConvertToClashMeta(outbounds *[]map[string]interface{}, b
 			switch tt {
 			case "http":
 				httpOpts := make(map[string]interface{})
-				if path, ok := transport["path"].([]interface{}); ok {
+				if path, ok := transport["path"].([]interface{}); ok && len(path) > 0 {
 					httpOpts["path"] = path[0]
 				} else if path, ok := transport["path"].(string); ok {
 					httpOpts["path"] = path
 				}
-				if host, ok := transport["host"].([]interface{}); ok {
+				if host, ok := transport["host"].([]interface{}); ok && len(host) > 0 {
 					httpOpts["host"] = host[0]
 				}
 				if isTls {

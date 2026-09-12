@@ -155,8 +155,13 @@ func (j *JsonService) getOutbounds(clientConfig json.RawMessage, inbounds []*mod
 				inbPass, _ := inbOptions["password"].(string)
 				userPass = append(userPass, inbPass)
 			}
+			// Two assertions chained: when the first fails it yields a nil
+			// map, and indexing that is fine, but the shape is worth reading
+			// in one step rather than trusting the chain.
 			var pass string
-			pass, _ = configs[util.ShadowsocksClientConfigKey(method)].(map[string]interface{})["password"].(string)
+			if cfg, ok := configs[util.ShadowsocksClientConfigKey(method)].(map[string]interface{}); ok {
+				pass, _ = cfg["password"].(string)
+			}
 			userPass = append(userPass, pass)
 			outbound["password"] = strings.Join(userPass, ":")
 		} else { // Other protocols
