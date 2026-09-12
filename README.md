@@ -44,9 +44,18 @@
 
 [Other UI Screenshots](https://github.com/alireza0/s-ui-frontend/blob/main/screenshots.md)
 
-## API Documentation
+## Documentation
 
-[API-Documentation Wiki](https://github.com/alireza0/s-ui/wiki/API-Documentation)
+Full documentation lives in the [Wiki](https://github.com/alireza0/s-ui/wiki):
+
+| Page | Contents |
+|------|----------|
+| [Subscription Service](https://github.com/alireza0/s-ui/wiki/Subscription-Service) | Subscription URLs, the three formats, response headers |
+| [Subscription JSON Template](https://github.com/alireza0/s-ui/wiki/Subscription-JSON-Template) | Structure and supported keys of the sing-box subscription template |
+| [Subscription Clash Template](https://github.com/alireza0/s-ui/wiki/Subscription-Clash-Template) | The Clash.Meta template, proxy groups and filters |
+| [API Documentation](https://github.com/alireza0/s-ui/wiki/API-Documentation) | The token-authenticated REST API (`/apiv2`) |
+| [Configuration Objects](https://github.com/alireza0/s-ui/wiki/Configuration-Objects) | Shape of the objects read and written through the API |
+| [Settings Reference](https://github.com/alireza0/s-ui/wiki/Settings-Reference) | Every panel setting and its default |
 
 ## Default Installation Information
 - Panel Port: 2095
