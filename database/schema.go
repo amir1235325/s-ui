@@ -6,14 +6,9 @@ import (
 	"gorm.io/gorm"
 )
 
-// table ties a model to the code that copies its rows, so the schema is
-// described in exactly one place.
-//
-// It exists because the list was previously written out twice -- once in
-// InitDB's AutoMigrate and once in GetDb's -- and the two drifted: Service and
-// Tokens were migrated but never backed up. A restore then AutoMigrated an
-// empty services table over the top, and every configured service and every API
-// token was gone with no warning.
+// table ties a model to the code that copies its rows. The list used to be
+// written out twice, in InitDB and in GetDb, and drifted: Service and Tokens
+// were migrated but never backed up.
 type table struct {
 	// name is what the backup endpoint's exclude parameter matches on.
 	name  string
@@ -22,8 +17,7 @@ type table struct {
 	copyRows func(src, dst *gorm.DB) error
 }
 
-// schema is the whole database. Adding a model here migrates it and backs it up;
-// there is no second list to remember.
+// schema is the whole database: adding a model here migrates it and backs it up.
 func schema() []table {
 	return []table{
 		{"settings", &model.Setting{}, copyRows[model.Setting]},

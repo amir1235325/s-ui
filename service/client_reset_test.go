@@ -45,11 +45,8 @@ func reload(t *testing.T, db *gorm.DB, id uint) model.Client {
 	return got
 }
 
-// A client saved with auto_reset on and reset_days zero matched the periodic
-// reset query, then had NextReset set to dt + 0 == dt -- so it matched again on
-// the very next run of the deplete job, every minute, forever. Its traffic was
-// folded into the totals and zeroed each time, which meant up+down could never
-// exceed its volume and a quota-limited account became unlimited.
+// With reset_days zero, NextReset became dt + 0 == dt, so the row matched again
+// every minute and a quota-limited account became effectively unlimited.
 func TestPeriodicResetSkipsZeroResetDays(t *testing.T) {
 	db := clientTestDB(t)
 	s := &ClientService{}
@@ -78,8 +75,7 @@ func TestPeriodicResetSkipsZeroResetDays(t *testing.T) {
 	}
 }
 
-// The normal path still has to work: a due client with a sane period is reset
-// and its next boundary moved forward by exactly that many days.
+// The normal path: a due client is reset and its boundary moved forward.
 func TestPeriodicResetRollsTrafficForward(t *testing.T) {
 	db := clientTestDB(t)
 	s := &ClientService{}
@@ -137,10 +133,8 @@ func TestPeriodicResetLeavesFutureBoundariesAlone(t *testing.T) {
 	}
 }
 
-// preserveServerOwnedFields has to restore the traffic counters as well as the
-// timestamps. The stats job adds to up/down every ten seconds, so an admin who
-// opened the client editor and saved a minute later used to write the stale
-// values back and silently discard that minute of usage.
+// The traffic counters have to be restored as well as the timestamps, or an
+// editor left open for a minute writes stale values back over that usage.
 func TestEditDoesNotRollBackTraffic(t *testing.T) {
 	db := clientTestDB(t)
 	s := &ClientService{}
@@ -174,9 +168,8 @@ func TestEditDoesNotRollBackTraffic(t *testing.T) {
 	}
 }
 
-// The changes log stores the client name as JSON. It was built by string
-// concatenation, so a name containing a quote or a backslash produced a row no
-// reader could parse.
+// Built by string concatenation, a name with a quote or backslash produced a
+// changes-log row no reader could parse.
 func TestClientNameJSONIsValid(t *testing.T) {
 	for _, name := range []string{
 		`plain`,

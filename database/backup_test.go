@@ -14,9 +14,8 @@ import (
 	gormlogger "gorm.io/gorm/logger"
 )
 
-// seedEveryTable puts at least one row in every table the schema describes, so
-// a backup that drops a table is visible as a missing row rather than as an
-// empty database nobody notices until a restore.
+// A row in every table the schema describes, so a dropped table shows up as a
+// missing row rather than as an empty database nobody notices until a restore.
 func seedEveryTable(t *testing.T) {
 	t.Helper()
 
@@ -56,10 +55,8 @@ func openBackup(t *testing.T, contents []byte) *gorm.DB {
 	return restored
 }
 
-// TestBackupCarriesEveryTable is the test that would have caught the schema
-// drift: InitDB migrated eleven models while GetDb backed up nine, so services
-// and API tokens were silently absent from every backup. Restoring one then
-// AutoMigrated an empty services table over the top.
+// The schema drift: InitDB migrated eleven models while GetDb backed up nine,
+// so services and API tokens were absent from every backup.
 func TestBackupCarriesEveryTable(t *testing.T) {
 	if err := InitDB(filepath.Join(t.TempDir(), "test.db")); err != nil {
 		t.Fatal(err)
@@ -90,8 +87,7 @@ func TestBackupCarriesEveryTable(t *testing.T) {
 	}
 }
 
-// The exclude parameter is what the UI offers for trimming a large backup. It
-// must skip exactly the named tables and nothing else.
+// exclude must skip exactly the named tables and nothing else.
 func TestBackupExcludesOnlyWhatWasAsked(t *testing.T) {
 	if err := InitDB(filepath.Join(t.TempDir(), "test.db")); err != nil {
 		t.Fatal(err)
@@ -128,10 +124,8 @@ func TestBackupExcludesOnlyWhatWasAsked(t *testing.T) {
 	}
 }
 
-// Two backups taken close together must not collide. The temp path used to be
-// built with the layout "20060102-200203" -- a typo for "150405" -- which
-// rendered the same string for every call in a period, so concurrent downloads
-// shared one file and deleted it from under each other.
+// The temp path used the layout "20060102-200203", a typo for "150405", so
+// every call in a period rendered the same name and two downloads collided.
 func TestBackupsDoNotShareATempFile(t *testing.T) {
 	if err := InitDB(filepath.Join(t.TempDir(), "test.db")); err != nil {
 		t.Fatal(err)
@@ -150,8 +144,7 @@ func TestBackupsDoNotShareATempFile(t *testing.T) {
 		t.Fatalf("a backup came back empty: %d and %d bytes", len(first), len(second))
 	}
 
-	// Both must be openable databases carrying the seeded rows; a shared temp
-	// file would leave one of them truncated or gone.
+	// A shared temp file leaves one of them truncated or gone.
 	for i, contents := range [][]byte{first, second} {
 		restored := openBackup(t, contents)
 		var count int64

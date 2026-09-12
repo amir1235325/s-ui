@@ -9,22 +9,27 @@ on:
       - main
     tags:
       - "*"
-    paths:
-      - '.github/workflows/release.yml'
-      - 'frontend/**'
-      - '**.sh'
-      - '**.go'
-      - 'go.mod'
-      - 'go.sum'
-      - 's-ui.service'
+
+permissions:
+  contents: read
 
 env:
   NODE_VERSION: "26"
   CRONET_GO_REPO: https://github.com/sagernet/cronet-go.git
   BOOTLIN_BASE_URL: https://toolchains.bootlin.com/downloads/releases/toolchains
+  LIBCRONET_BASE_URL: "https://github.com/SagerNet/cronet-go/releases/latest/download"
 
 jobs:
+  test:
+    # Skipped on a tag and on a published release: both ship a commit that
+    # already went through this gate on main.
+    if: ${{ github.event_name != 'release' && !startsWith(github.ref, 'refs/tags/') }}
+    uses: ./.github/workflows/test.yml
+
   build-frontend:
+    needs: test
+    # A skipped gate is not a failed one, so the build still runs on a tag.
+    if: ${{ always() && needs.test.result != 'failure' && needs.test.result != 'cancelled' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository (frontend only)
@@ -214,15 +219,109 @@ jobs:
           path: ./s-ui-linux-${{ matrix.platform }}.tar.gz
           retention-days: 30
 
+  build-windows:
+    needs: build-frontend
+    name: build-windows-${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: amd64, runner: windows-latest, cgo: "1" }
+          - { arch: arm64, runner: ubuntu-latest, cgo: "0" }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6.0.2
+
+      - name: Download frontend artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: frontend-dist
+          path: web/html
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          cache: false
+          go-version-file: go.mod
+
+      - name: Install zip for Windows
+        if: matrix.arch == 'amd64'
+        shell: powershell
+        run: |
+          # Install Chocolatey if not available
+          if (!(Get-Command choco -ErrorAction SilentlyContinue)) {
+            Set-ExecutionPolicy Bypass -Scope Process -Force
+            [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
+            iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
+          }
+          # Install zip
+          choco install zip -y
+
+      - name: Build s-ui
+        shell: bash
+        run: |
+          export CGO_ENABLED=${{ matrix.cgo }}
+          export GOOS=windows
+          export GOARCH=${{ matrix.arch }}
+          
+          echo "Building for Windows ${{ matrix.arch }}"
+          go version
+          go env GOOS GOARCH
+          
+          . ./build-tags.sh
+          TAGS=$(tags_for windows)
+          LDFLAGS=$(ldflags_for windows)
+          go build -ldflags="$LDFLAGS" -tags "$TAGS" -o sui.exe main.go
+          file sui.exe
+          
+          mkdir s-ui-windows
+          cp sui.exe s-ui-windows/
+          cp -r windows/* s-ui-windows/
+
+      - name: Download libcronet-go
+        shell: bash
+        run: |
+          curl -qsL -o s-ui-windows/libcronet.dll ${{ env.LIBCRONET_BASE_URL }}/libcronet-windows-${{ matrix.arch }}.dll
+
+      - name: Package
+        shell: bash
+        run: |
+          zip -r "s-ui-windows-${{ matrix.arch }}.zip" s-ui-windows
+
+      - name: Upload files to Artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: s-ui-windows-${{ matrix.arch }}
+          path: ./s-ui-windows-${{ matrix.arch }}.zip
+          retention-days: 30
+
+  # One place that touches the release, reached only once every build has
+  # succeeded. Publishing from each matrix leg left a half-populated release
+  # behind whenever one platform failed, and the two copies of this step had
+  # drifted to different tag expressions.
+  publish:
+    needs: [build-linux, build-windows]
+    if: |
+      (github.event_name == 'release' && github.event.action == 'published') ||
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: s-ui-*
+          merge-multiple: true
+          path: dist
+
       - name: Upload to Release
         uses: svenstaro/upload-release-action@v2
-        if: |
-          (github.event_name == 'release' && github.event.action == 'published') ||
-          (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/'))
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           tag: ${{ github.event_name == 'release' && github.event.release.tag_name || github.ref_name }}
-          file: s-ui-linux-${{ matrix.platform }}.tar.gz
-          asset_name: s-ui-linux-${{ matrix.platform }}.tar.gz
+          file: dist/*
+          file_glob: true
           prerelease: true
           overwrite: true

@@ -12,13 +12,9 @@ import (
 	"gorm.io/gorm"
 )
 
-// MigrateDb brings an older database up to the current version.
-//
-// It returns an error rather than calling log.Fatal, which it used to do from
-// six places. That mattered because ImportDB calls this in the middle of a
-// restore: a migration failure killed the whole panel process with the live
-// database already renamed away, and systemd restarted it straight into the
-// same failure.
+// MigrateDb brings an older database up to the current version. It returns an
+// error rather than calling log.Fatal: ImportDB calls this mid-restore, with
+// the live database already renamed away.
 func MigrateDb() error {
 	// void running on first install
 	path := config.GetDBPath()
@@ -47,9 +43,8 @@ func MigrateDb() error {
 
 	currentVersion := config.GetVersion()
 	dbVersion := ""
-	// The error was discarded here, so a missing or unreadable settings table
-	// was indistinguishable from an unset version -- and the empty string sends
-	// the whole legacy chain through again.
+	// An unreadable settings table must not look like an unset version, which
+	// would send the whole legacy chain through again.
 	if err := tx.Raw("SELECT value FROM settings WHERE key = ?", "version").Find(&dbVersion).Error; err != nil {
 		return fmt.Errorf("reading database version: %w", err)
 	}
@@ -73,8 +68,7 @@ func MigrateDb() error {
 		dbVersion = "1.2"
 	}
 
-	// Before 1.3. Was `dbVersion[0:3] == "1.2"`, which panics on any stored
-	// value shorter than three characters.
+	// Before 1.3. Was dbVersion[0:3], which panics on a short value.
 	if major, minor := majorMinor(dbVersion); major == 1 && minor == 2 {
 		if err := to1_3(tx); err != nil {
 			return fmt.Errorf("migration to 1.3 failed: %w", err)
@@ -107,12 +101,8 @@ func MigrateDb() error {
 }
 
 // setVersion records the schema version, inserting the row when it is absent.
-//
-// A plain UPDATE affects zero rows and reports no error when there is no
-// version row -- and ResetSettings deletes every settings row, so after
-// `s-ui setting -reset` the next migrate replayed the entire legacy chain
-// against a current database, failed to record anything, and did it again on
-// every subsequent run.
+// A plain UPDATE affects zero rows and reports no error, so after a settings
+// reset every migrate replayed the whole legacy chain and recorded nothing.
 func setVersion(tx *gorm.DB, version string) error {
 	res := tx.Exec("UPDATE settings SET value = ? WHERE key = ?", version, "version")
 	if res.Error != nil {
@@ -125,13 +115,9 @@ func setVersion(tx *gorm.DB, version string) error {
 }
 
 // compareVersions orders two dotted versions numerically, returning -1, 0 or 1.
-//
-// These were compared as strings, which is correct only while every component
-// is a single digit: "1.10.0" < "1.5.1" is true lexicographically, so the
-// release after 1.9 would have replayed to1_5_1 against every database and
-// stripped the explicit CA from every TLS client config.
-//
-// A missing component counts as zero, so "1.2" and "1.2.0" compare equal.
+// Not as strings: "1.10.0" < "1.5.1" lexicographically, so the release after
+// 1.9 would replay to1_5_1 against every database. A missing component counts
+// as zero, so "1.2" and "1.2.0" compare equal.
 func compareVersions(a, b string) int {
 	av, bv := parseVersion(a), parseVersion(b)
 	for i := range av {
@@ -150,9 +136,9 @@ func majorMinor(v string) (int, int) {
 	return parsed[0], parsed[1]
 }
 
-// parseVersion reads up to three numeric components. Anything it cannot parse
-// stops the scan and leaves the rest at zero, so a garbage value sorts as the
-// oldest possible version rather than panicking or comparing as text.
+// parseVersion reads up to three numeric components. Anything unparseable
+// stops the scan and leaves the rest zero, so garbage sorts as the oldest
+// version rather than panicking.
 func parseVersion(v string) [3]int {
 	var parsed [3]int
 	v = strings.TrimPrefix(strings.TrimSpace(v), "v")

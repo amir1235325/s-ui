@@ -11,7 +11,7 @@
 #   test      yes       -        go test; release.yml's non-naive targets
 #   dev       yes       musl     build.sh
 #   release   yes       musl     release.yml, naive targets only
-#   windows   yes       purego   windows.yml
+#   windows   yes       purego   release.yml, build-windows
 #   docker    -         purego   Dockerfile, Dockerfile.frontend-artifact
 #
 # with_musl links a prebuilt musl libcronet.a and needs the Chromium toolchain

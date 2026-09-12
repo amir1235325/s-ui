@@ -231,13 +231,9 @@ func (s *ClientService) Save(tx *gorm.DB, act string, data json.RawMessage, host
 	return inboundIds, nil
 }
 
-// preserveServerOwnedFields restores the columns the panel maintains itself,
-// so an edit cannot write them back from whatever the form was rendered with.
-//
-// The traffic counters matter as much as the timestamps: the stats job adds to
-// up/down every ten seconds, so an admin who opened the client editor and saved
-// a minute later used to roll them back to the values the form was built from,
-// silently discarding that minute of usage against the client's quota.
+// preserveServerOwnedFields restores the columns the panel maintains itself.
+// The traffic counters matter as much as the timestamps: the stats job writes
+// up/down every ten seconds, so a stale form would roll them back.
 func (s *ClientService) preserveServerOwnedFields(tx *gorm.DB, client *model.Client) {
 	var existing model.Client
 	if err := tx.Model(model.Client{}).
@@ -253,12 +249,9 @@ func (s *ClientService) preserveServerOwnedFields(tx *gorm.DB, client *model.Cli
 	client.TotalDown = existing.TotalDown
 }
 
-// clientNameJSON encodes a client name for the changes log.
-//
-// These were built as "\"" + name + "\"", so a name containing a quote or a
-// backslash produced invalid JSON that every reader of the log then failed on.
-// cmd/migration/1_1.go already carries a repair migration for the previous
-// generation of this same bug.
+// clientNameJSON encodes a client name for the changes log. Built by string
+// concatenation, a name with a quote or backslash produced unreadable JSON --
+// cmd/migration/1_1.go already repairs the previous generation of this bug.
 func clientNameJSON(name string) json.RawMessage {
 	encoded, err := json.Marshal(name)
 	if err != nil {
@@ -583,12 +576,8 @@ func (s *ClientService) ResetClients(tx *gorm.DB, dt int64) ([]uint, error) {
 	}
 	allClients = append(allClients, resetClients...)
 
-	// Set periodic reset.
-	//
-	// reset_days > 0 is a backstop: with it zero, NextReset below is set to
-	// dt + 0 == dt, so the row matches again on the very next run of this job
-	// and the client's traffic is folded away and zeroed every minute. Its
-	// volume quota could then never be reached.
+	// reset_days > 0 is a backstop: at zero, NextReset becomes dt + 0 == dt, so
+	// the row matches every minute and the volume quota is never reached.
 	err = tx.Model(model.Client{}).
 		Where("delay_start = false AND auto_reset = true AND reset_days > 0 AND next_reset < ?", dt).Find(&resetClients).Error
 	if err != nil {

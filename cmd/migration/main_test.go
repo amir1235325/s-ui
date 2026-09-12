@@ -2,11 +2,8 @@ package migration
 
 import "testing"
 
-// Versions were compared as strings, which is correct only while every
-// component stays a single digit. "1.10.0" < "1.5.1" is true lexicographically,
-// so the first release after 1.9 would have replayed to1_5_1 against every
-// database -- stripping the explicit CA from every TLS client config that had
-// one.
+// Compared as strings, "1.10.0" < "1.5.1", so the first release after 1.9 would
+// have replayed to1_5_1 and stripped the CA from every TLS client config.
 func TestCompareVersions(t *testing.T) {
 	testCases := []struct {
 		a, b string
@@ -28,8 +25,7 @@ func TestCompareVersions(t *testing.T) {
 		{"1.2", "1.2.0", 0},
 		{"1", "1.0.0", 0},
 
-		// An unset version is the oldest thing there is, so every migration
-		// still runs against a database that has never recorded one.
+		// Unset is the oldest version, so every migration still runs.
 		{"", "1.0.0", -1},
 		{"", "", 0},
 
@@ -49,8 +45,7 @@ func TestCompareVersions(t *testing.T) {
 	}
 }
 
-// The 1.3 step was gated on dbVersion[0:3] == "1.2", which panics outright on
-// any stored value shorter than three characters.
+// The 1.3 gate was dbVersion[0:3], which panics on a short stored value.
 func TestMajorMinorHandlesShortAndEmptyVersions(t *testing.T) {
 	testCases := []struct {
 		version          string
@@ -72,8 +67,7 @@ func TestMajorMinorHandlesShortAndEmptyVersions(t *testing.T) {
 	}
 }
 
-// The 1.2-series gate must match the whole series and nothing outside it. A
-// prefix comparison on "1.2" also matched "1.20".
+// A prefix comparison on "1.2" also matched "1.20".
 func TestOneTwoSeriesGate(t *testing.T) {
 	inSeries := func(v string) bool {
 		major, minor := majorMinor(v)

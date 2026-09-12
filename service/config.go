@@ -17,18 +17,11 @@ var (
 	LastUpdate int64
 	corePtr    *core.Core
 
-	// lifecycleMu serialises whole start/stop/restart/maintenance sequences,
-	// not just a flag. It replaces the old startCoreInProgress bool, which was
-	// released before corePtr.Start ran: a maintenance toggle could land while
-	// a start was still in flight, see IsRunning() as false (it is only set
-	// once Start returns), stop nothing, and leave the core serving clients
-	// with the panel reporting maintenance.
-	//
-	// Ordering: this is the outer lock; core.Core.mu is the inner one.
+	// Serialises whole start/stop/restart/maintenance sequences, not just a
+	// flag: corePtr.IsRunning() is false for the seconds a start takes.
+	// Outer lock; core.Core.mu is the inner one.
 	lifecycleMu sync.Mutex
 
-	// failMu guards lastStartFailTime alone, which is read by the cooldown
-	// check and written after a failed start.
 	failMu            sync.Mutex
 	lastStartFailTime time.Time
 	startCooldown     = 15 * time.Second
@@ -228,11 +221,9 @@ func (s *ConfigService) inMaintenance() bool {
 	return maintenance
 }
 
-// StartCore starts the core if it is not already running.
-//
-// It does not queue: the five-second watchdog calls this, and a start can take
-// seconds, so a caller that finds a sequence already in flight returns instead
-// of piling up behind it.
+// StartCore starts the core if it is not already running. It does not queue:
+// the five-second watchdog calls this, so a caller that finds a sequence in
+// flight returns rather than piling up behind it.
 func (s *ConfigService) StartCore() error {
 	if !lifecycleMu.TryLock() {
 		return nil
@@ -242,16 +233,11 @@ func (s *ConfigService) StartCore() error {
 }
 
 // startCoreLocked starts the core. The caller must hold lifecycleMu.
-//
-// bypassCooldown is set for actions the operator asked for directly (an
-// explicit restart, leaving maintenance). The cooldown exists to stop the
-// watchdog hammering a config that fails to load; it should not make a button
-// press silently do nothing.
+// bypassCooldown is set for operator actions, so a recent failure cannot make
+// a button press silently do nothing.
 func (s *ConfigService) startCoreLocked(bypassCooldown bool) error {
-	// Re-checked here, under the lock, and not only at the entry to the outer
-	// call: maintenance can be switched on while this goroutine was waiting,
-	// and starting afterwards would put every client back online behind the
-	// operator's back.
+	// Re-checked under the lock: maintenance can be switched on while this
+	// goroutine was waiting.
 	if s.inMaintenance() {
 		return nil
 	}
@@ -275,8 +261,7 @@ func (s *ConfigService) startCoreLocked(bypassCooldown bool) error {
 		logger.Error("start sing-box err:", err.Error())
 		return err
 	}
-	// Cleared on success, so one failure does not keep the cooldown armed for
-	// the rest of the process lifetime.
+	// Cleared on success, or one failure arms the cooldown forever.
 	failMu.Lock()
 	lastStartFailTime = time.Time{}
 	failMu.Unlock()
@@ -285,20 +270,16 @@ func (s *ConfigService) startCoreLocked(bypassCooldown bool) error {
 }
 
 // coolingDown reports whether a start failed recently enough that the watchdog
-// should hold off. Operator-initiated actions pass bypassCooldown and skip it,
-// so a recent failure cannot make a button press silently do nothing.
+// should hold off.
 func coolingDown() bool {
 	failMu.Lock()
 	defer failMu.Unlock()
 	return time.Since(lastStartFailTime) < startCooldown
 }
 
-// RestartCore stops and starts the core as one sequence.
-//
-// It blocks for the whole thing rather than bailing out like StartCore: this is
-// only reached from an explicit operator action, and the old version could stop
-// the core, find a start already in progress, return nil, and report success
-// with the core left down.
+// RestartCore stops and starts the core as one sequence. It blocks rather than
+// bailing out like StartCore, so an operator action cannot report success with
+// the core left down.
 func (s *ConfigService) RestartCore() error {
 	lifecycleMu.Lock()
 	defer lifecycleMu.Unlock()
@@ -343,14 +324,10 @@ func (s *ConfigService) restartCoreWithConfig(config json.RawMessage) error {
 	return nil
 }
 
-// SetMaintenance takes the core out of service, or puts it back.
-//
-// The setting is written first, so once the lock is released the watchdog
-// reads the new value and will not restart what was just stopped. Taking
-// lifecycleMu blocks until any in-flight start has finished, which is what
-// makes turning maintenance on during a start reliable: it then sees the core
-// as running and stops it, instead of finding IsRunning() false and doing
-// nothing.
+// SetMaintenance takes the core out of service, or puts it back. The setting is
+// written first so the watchdog will not restart what was just stopped, and the
+// blocking lock means an in-flight start has finished before we look at
+// IsRunning().
 func (s *ConfigService) SetMaintenance(enabled bool) error {
 	lifecycleMu.Lock()
 	defer lifecycleMu.Unlock()
@@ -397,18 +374,15 @@ func (s *ConfigService) CheckOutbound(tag string, link string) core.CheckOutboun
 func (s *ConfigService) Save(obj string, act string, data json.RawMessage, initUsers string, loginUser string, hostname string) ([]string, error) {
 	var err error
 	var objs []string = []string{obj}
-	// Set when the config object changed. The restart is deferred until after
-	// the commit: it used to be spawned inside the switch, so a failure on the
-	// changes-log insert below rolled the write back while the core was
-	// already running a config that was never persisted.
+	// Set when the config object changed. The restart waits for the commit, or
+	// a later rollback leaves the core running a config that was never saved.
 	var restartWith json.RawMessage
 
 	db := database.GetDB()
 	tx := db.Begin()
 	defer func() {
-		// A panic leaves err nil, so the old defer took the err == nil branch
-		// and committed a half-applied transaction -- while gin recovered the
-		// request and told the operator the save had failed.
+		// A panic leaves err nil, which would otherwise commit a half-applied
+		// transaction while gin tells the operator the save failed.
 		if r := recover(); r != nil {
 			tx.Rollback()
 			panic(r)
@@ -422,9 +396,8 @@ func (s *ConfigService) Save(obj string, act string, data json.RawMessage, initU
 			return
 		}
 		if restartWith != nil {
-			// Detached because this runs in an HTTP handler and a core restart
-			// takes seconds. The recover is not optional: a panic in a bare
-			// goroutine is outside gin's reach and would kill the process.
+			// Detached: a restart takes seconds and this is an HTTP handler.
+			// The recover is required -- a panic here is outside gin's reach.
 			go func() {
 				defer func() {
 					if r := recover(); r != nil {

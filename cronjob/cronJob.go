@@ -24,11 +24,10 @@ func NewCronJob() *CronJob {
 }
 
 func (c *CronJob) Start(loc *time.Location, trafficAge int, statsBucketSeconds int64, globalReset string) error {
-	// Recover: robfig/cron does not recover panics by default, so a nil deref
-	// in any job took the whole panel process down -- gin only covers the HTTP
-	// side. SkipIfStillRunning: the stats job fires every 10s and can block
-	// that long on the SQLite write lock, and overlapping runs each drain the
-	// core's traffic counters.
+	// Recover: robfig/cron does not recover panics by default, and gin only
+	// covers the HTTP side. SkipIfStillRunning: the stats job fires every 10s,
+	// can block that long on the write lock, and overlapping runs each drain
+	// the core's traffic counters.
 	c.cron = cron.New(
 		cron.WithLocation(loc),
 		cron.WithParser(cronParser),
@@ -38,8 +37,7 @@ func (c *CronJob) Start(loc *time.Location, trafficAge int, statsBucketSeconds i
 		),
 	)
 
-	// Registered before Start, not from a goroutine racing it, so a job cannot
-	// be missed on a panel that is stopped moments after boot.
+	// Registered before Start, not from a goroutine racing it.
 	addJob := func(spec string, job cron.Job, name string) {
 		if _, err := c.cron.AddJob(spec, job); err != nil {
 			logger.Warning("unable to schedule ", name, " <", spec, ">: ", err)

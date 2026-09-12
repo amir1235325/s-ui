@@ -31,13 +31,8 @@ func GetDb(exclude string) ([]byte, error) {
 		}
 	}
 
-	// os.CreateTemp, not a hand-built name. The old path was
-	// `dir + config.GetName() + time.Now().Format("20060102-200203")`, which had
-	// two defects: no separator, so the file landed in the binary's *parent*
-	// directory; and "200203" is a typo for the reference clock "150405", so
-	// every backup taken in the same period rendered the same name. Two
-	// downloads on one day opened the same file and deleted it from under each
-	// other.
+	// CreateTemp, not a hand-built timestamp: two downloads in the same period
+	// used to render the same name and delete the file from under each other.
 	dir, err := filepath.Abs(filepath.Dir(os.Args[0]))
 	if err != nil {
 		return nil, err
@@ -47,8 +42,7 @@ func GetDb(exclude string) ([]byte, error) {
 		return nil, err
 	}
 	dbPath := tmp.Name()
-	// SQLite opens the path itself; this handle is only here to reserve a
-	// unique name.
+	// SQLite opens the path itself; this handle only reserves the name.
 	tmp.Close()
 	defer os.Remove(dbPath)
 
@@ -68,8 +62,7 @@ func GetDb(exclude string) ([]byte, error) {
 	}
 	defer closeBackup()
 
-	// Same list InitDB migrates, so a table can never be created in the live
-	// database but missing from the backup.
+	// Same list InitDB migrates, so no table can be live but unbacked-up.
 	if err = backupDb.AutoMigrate(schemaModels()...); err != nil {
 		return nil, err
 	}
@@ -83,8 +76,7 @@ func GetDb(exclude string) ([]byte, error) {
 		}
 	}
 
-	// Fold the WAL back into the main file, otherwise the bytes read below are
-	// missing everything still sitting in the sidecar.
+	// Fold the WAL in, or the bytes read below miss whatever is still in it.
 	if err = backupDb.Exec("PRAGMA wal_checkpoint(TRUNCATE);").Error; err != nil {
 		return nil, err
 	}
@@ -114,12 +106,9 @@ func ImportDB(file multipart.File) error {
 		return common.NewErrorf("Error removing existing temporary db file: %v", err)
 	}
 
-	// Everything below up to the rename works on the upload alone. The live
-	// connection pool stays open throughout: it used to be closed here, before
-	// the copy and the validation, so any failure after that point -- a
-	// truncated upload, a full disk -- left every later query in the process
-	// failing with "sql: database is closed" until someone restarted the
-	// service by hand.
+	// Everything up to the rename works on the upload alone, and the live pool
+	// stays open: closing it here means a failed import breaks every later
+	// query with "sql: database is closed" until someone restarts the service.
 	tempFile, err := os.Create(tempPath)
 	if err != nil {
 		return common.NewErrorf("Error creating temporary db file: %v", err)
@@ -132,26 +121,22 @@ func ImportDB(file multipart.File) error {
 	}
 	defer os.Remove(tempPath)
 
-	// Open it and check it is actually an s-ui database, not merely some
-	// SQLite file. The header check above passes for any SQLite file at all --
-	// a browser profile, another panel's database -- and importing one of those
-	// used to replace the live database and then crash the process on the
-	// migration, leaving systemd to restart it straight into the same crash.
+	// The header check above passes for any SQLite file at all, including a
+	// browser profile. Importing one of those replaces the live database and
+	// then crashes the migration, into a systemd restart loop.
 	if err = validateImport(tempPath); err != nil {
 		return err
 	}
 
-	// Close the live pool and fold its WAL back in. Renaming the database out
-	// from under a -wal/-shm pair leaves those sidecars beside the imported
-	// file, and SQLite then runs recovery for a different database against it.
+	// Renaming out from under a -wal/-shm pair leaves those sidecars beside the
+	// imported file, and SQLite recovers the wrong database's pages into it.
 	if sqlDB, e := db.DB(); e == nil {
 		_ = db.Exec("PRAGMA wal_checkpoint(TRUNCATE);").Error
 		_ = sqlDB.Close()
 	}
 	removeSidecars(dbPath)
 
-	// Keep the pre-import database, timestamped, so a bad import is
-	// recoverable. The old code deleted it on the success path.
+	// Keep the pre-import database, timestamped, so a bad import is recoverable.
 	fallbackPath := fmt.Sprintf("%s.backup-%s", dbPath, time.Now().Format("20060102-150405"))
 	if err = os.Rename(dbPath, fallbackPath); err != nil {
 		reopen(dbPath)
@@ -198,9 +183,8 @@ func validateImport(path string) error {
 		}
 	}()
 
-	// These three carry the panel's identity: settings holds the schema
-	// version and the session secret, and an import without clients and
-	// inbounds is not a panel backup whatever else it contains.
+	// settings carries the schema version and session secret; without clients
+	// and inbounds it is not a panel backup whatever else it holds.
 	for _, required := range []string{"settings", "clients", "inbounds"} {
 		if !candidate.Migrator().HasTable(required) {
 			return common.NewErrorf("Not an s-ui database: table %q is missing", required)
@@ -209,9 +193,8 @@ func validateImport(path string) error {
 	return nil
 }
 
-// removeSidecars drops the -wal and -shm files belonging to path. They describe
-// the database being replaced, and leaving them next to a different one invites
-// SQLite to recover pages into it.
+// removeSidecars drops the -wal and -shm files belonging to path; they describe
+// the database being replaced, not the one taking its place.
 func removeSidecars(path string) {
 	for _, suffix := range []string{"-wal", "-shm"} {
 		if err := os.Remove(path + suffix); err != nil && !os.IsNotExist(err) {
@@ -220,8 +203,7 @@ func removeSidecars(path string) {
 	}
 }
 
-// reopen restores the connection pool after an import gave up, so the panel
-// keeps serving instead of failing every query until it is restarted.
+// reopen restores the connection pool after an import gave up.
 func reopen(path string) {
 	if err := InitDB(path); err != nil {
 		logger.Error("unable to reopen the database after a failed import: ", err)
@@ -240,8 +222,7 @@ func restoreFallback(dbPath, fallbackPath string) {
 func IsSQLiteDB(file io.Reader) (bool, error) {
 	signature := []byte("SQLite format 3\x00")
 	buf := make([]byte, len(signature))
-	// ReadFull, because a single Read may return fewer bytes than asked for and
-	// would then compare a partly-filled buffer.
+	// ReadFull: a single Read may return short and compare a partial buffer.
 	if _, err := io.ReadFull(file, buf); err != nil {
 		return false, err
 	}

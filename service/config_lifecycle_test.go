@@ -9,9 +9,8 @@ import (
 	"github.com/alireza0/s-ui/database"
 )
 
-// lifecycleService gives the test a database and a real but unstarted Core, so
-// the lifecycle functions can be called for their locking and guard behaviour
-// without ever bringing a sing-box instance up.
+// A database and a real but unstarted Core, so the lifecycle functions can be
+// exercised for locking and guard behaviour without starting sing-box.
 func lifecycleService(t *testing.T) *ConfigService {
 	t.Helper()
 	if err := database.InitDB(filepath.Join(t.TempDir(), "test.db")); err != nil {
@@ -23,8 +22,7 @@ func lifecycleService(t *testing.T) *ConfigService {
 	return &ConfigService{}
 }
 
-// mustFinish fails the test rather than hanging the suite when a lifecycle call
-// deadlocks, which is the failure mode a mistake in the locking would produce.
+// Fails rather than hanging the suite, which is what a locking mistake does.
 func mustFinish(t *testing.T, what string, fn func()) {
 	t.Helper()
 	done := make(chan struct{})
@@ -39,10 +37,8 @@ func mustFinish(t *testing.T, what string, fn func()) {
 	}
 }
 
-// StopCore, RestartCore and SetMaintenance all take the lifecycle lock, and all
-// three need to stop the core. If any of them called the public StopCore
-// instead of the locked variant it would deadlock on itself, so this walks the
-// three entry points that reach a stop.
+// All three entry points that reach a stop take the lifecycle lock; one calling
+// the public StopCore instead of the locked variant would deadlock on itself.
 func TestLifecycleEntryPointsDoNotSelfDeadlock(t *testing.T) {
 	s := lifecycleService(t)
 
@@ -52,9 +48,7 @@ func TestLifecycleEntryPointsDoNotSelfDeadlock(t *testing.T) {
 		}
 	})
 
-	// With maintenance on, RestartCore refuses before touching the core, and
-	// SetMaintenance(true) finds it already stopped. Both still take and
-	// release the lock, which is what is under test.
+	// Both still take and release the lock, which is what is under test.
 	if err := s.SettingService.SetMaintenance(true); err != nil {
 		t.Fatal(err)
 	}
@@ -75,14 +69,9 @@ func TestLifecycleEntryPointsDoNotSelfDeadlock(t *testing.T) {
 	})
 }
 
-// The bug this locks down: SetMaintenance used to run while a start was still
-// in flight. It read IsRunning(), which is only set once Start returns, saw
-// false, stopped nothing and reported success -- leaving the panel showing
-// maintenance while the core came up and served clients anyway.
-//
-// The fix is that a maintenance toggle takes the same lock a start holds for
-// its whole sequence, so it cannot observe that half-started state. Holding the
-// lock here stands in for the in-flight start.
+// SetMaintenance used to run while a start was in flight, read IsRunning() as
+// false, stop nothing and report success -- panel in maintenance, core serving
+// clients. Holding the lock here stands in for that in-flight start.
 func TestSetMaintenanceWaitsForAnInFlightStart(t *testing.T) {
 	s := lifecycleService(t)
 
@@ -119,9 +108,8 @@ func TestSetMaintenanceWaitsForAnInFlightStart(t *testing.T) {
 	}
 }
 
-// StartCore is called by the five-second watchdog. It must not queue up behind
-// a sequence that is already running, or a slow start would leave watchdog
-// ticks stacked up waiting to run against a core that is already up.
+// The five-second watchdog calls StartCore; it must not queue behind a sequence
+// already running, or ticks stack up against a core that is already up.
 func TestStartCoreSkipsWhenBusy(t *testing.T) {
 	s := lifecycleService(t)
 
@@ -141,15 +129,10 @@ func TestStartCoreSkipsWhenBusy(t *testing.T) {
 	}
 }
 
-// The cooldown stops the five-second watchdog hammering a config that will not
-// load. These cover the watchdog side, which is what the cooldown exists for.
-//
-// The other half -- that RestartCore and leaving maintenance pass
-// bypassCooldown, so a recent failure cannot make a button press silently do
-// nothing -- is deliberately not tested here: both paths go on to build and
-// start a real sing-box instance, which binds ports and trips sing-box's own
-// race in route.NetworkManager. That behaviour belongs in an integration test,
-// not this package.
+// The cooldown stops the watchdog hammering a config that will not load. Only
+// the watchdog side is covered: the bypassCooldown paths go on to start a real
+// instance, which binds ports and trips sing-box's own route.NetworkManager
+// race, so they belong in an integration test.
 func TestCooldownHoldsOffTheWatchdog(t *testing.T) {
 	s := lifecycleService(t)
 
@@ -169,9 +152,8 @@ func TestCooldownHoldsOffTheWatchdog(t *testing.T) {
 	}
 }
 
-// The cooldown was never cleared on a successful start, so a single early
-// failure kept it armed and every later watchdog tick was still comparing
-// against that old timestamp.
+// The cooldown was never cleared on success, so one early failure kept it armed
+// for the rest of the process lifetime.
 func TestCooldownClearsOnSuccess(t *testing.T) {
 	setFailTime(t, time.Now())
 	if !coolingDown() {

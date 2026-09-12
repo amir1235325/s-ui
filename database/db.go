@@ -36,11 +36,9 @@ func initUser() error {
 
 func OpenDB(dbPath string) error {
 	dir := path.Dir(dbPath)
-	// 0700, not the old 01740. That literal's 01000 bit is not Go's sticky bit
-	// (os.ModeSticky is 1<<24), so it was silently dropped and the directory
-	// came out 0740; the intent was clearly owner-only. MkdirAll also does
-	// nothing when the directory already exists, so an install that once had a
-	// looser mode kept it -- hence the explicit Chmod below.
+	// 0700, not the old 01740: that 01000 bit is not Go's sticky bit
+	// (os.ModeSticky is 1<<24) and was dropped, leaving 0740. MkdirAll is a
+	// no-op on an existing directory, hence the explicit Chmod.
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
@@ -86,12 +84,9 @@ func OpenDB(dbPath string) error {
 	sqlDB.SetConnMaxLifetime(time.Hour)
 	sqlDB.SetConnMaxIdleTime(5 * time.Minute)
 
-	// SQLite creates the database 0666 & ~umask, so it lands world-readable on
-	// a default umask. It holds every client's credentials, the API tokens in
-	// plaintext and the session secret. The owner-only directory above already
-	// blocks other users from reaching it, but the file should not depend on
-	// that alone -- a copied or moved database would carry the loose mode with
-	// it. The sidecars hold the same pages.
+	// SQLite creates the file 0666 & ~umask. The owner-only directory already
+	// shields it, but a copied or moved database carries its own mode. The
+	// sidecars hold the same pages.
 	for _, p := range []string{dbPath, dbPath + "-wal", dbPath + "-shm"} {
 		if err := os.Chmod(p, 0o600); err != nil && !os.IsNotExist(err) {
 			return err

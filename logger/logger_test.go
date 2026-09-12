@@ -8,11 +8,9 @@ import (
 	"github.com/op/go-logging"
 )
 
-// TestBufferConcurrentAccess reproduces the shape of the panel at runtime: cron
-// jobs, HTTP handlers and sing-box connection goroutines all log while the
-// /logs endpoint reads the buffer. Before addToBuffer and GetLogs shared a
-// mutex this tripped the race detector on both the append and the re-slice.
-// Run with -race; without it the test only proves nothing panics.
+// Cron jobs, HTTP handlers and sing-box goroutines all log while /logs reads
+// the buffer. Before addToBuffer and GetLogs shared a mutex this tripped -race
+// on both the append and the re-slice; without -race it only proves no panic.
 func TestBufferConcurrentAccess(t *testing.T) {
 	InitLogger(logging.ERROR)
 	resetBuffer()
@@ -44,9 +42,7 @@ func TestBufferConcurrentAccess(t *testing.T) {
 	}
 }
 
-// TestGetLogsRespectsCount locks down an off-by-one: the loop condition was
-// `len(output) <= c`, which was still true once c entries had been collected,
-// so each call returned c+1 lines.
+// The loop condition was `len(output) <= c`, so each call returned c+1 lines.
 func TestGetLogsRespectsCount(t *testing.T) {
 	InitLogger(logging.ERROR)
 	resetBuffer()
@@ -62,8 +58,7 @@ func TestGetLogsRespectsCount(t *testing.T) {
 	}
 }
 
-// TestGetLogsFiltersByLevel checks the level filter still excludes finer levels
-// than the one requested, so the mutex change did not alter what is returned.
+// The mutex change must not alter which levels are returned.
 func TestGetLogsFiltersByLevel(t *testing.T) {
 	InitLogger(logging.ERROR)
 	resetBuffer()
@@ -84,8 +79,7 @@ func TestGetLogsFiltersByLevel(t *testing.T) {
 	}
 }
 
-// TestBufferIsBounded covers the ring-buffer trim, which is the operation the
-// concurrent append used to race against.
+// The ring-buffer trim, which the concurrent append used to race against.
 func TestBufferIsBounded(t *testing.T) {
 	if testing.Short() {
 		t.Skip("fills the 10240-entry buffer")

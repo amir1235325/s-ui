@@ -18,21 +18,14 @@ type onlines struct {
 }
 
 var (
-	// statsMu guards both of the values below. SaveStats runs on the ten-second
-	// cron while GetOnlines is read from a gin handler, and the slices were
-	// being rebuilt under the reader's feet.
+	// Guards both values below: SaveStats runs on the ten-second cron while
+	// GetOnlines is read from a gin handler.
 	statsMu         sync.Mutex
 	onlineResources = &onlines{}
 
-	// pendingStats holds traffic drained from the core that has not reached the
-	// database yet.
-	//
-	// StatsTracker.GetStats is destructive -- it Swap(0)s every counter -- so
-	// the old code lost the whole ten-second window for every user whenever the
-	// transaction failed. With _txlock=immediate a single SQLITE_BUSY from the
-	// daily stats purge was enough, and the counters were already zeroed by
-	// then, so the traffic could not be recovered. Carrying it forward means a
-	// busy database delays accounting instead of dropping it.
+	// Traffic drained from the core that has not reached the database yet.
+	// GetStats is destructive (it Swap(0)s every counter), so without this a
+	// single SQLITE_BUSY loses the whole ten-second window for every user.
 	pendingStats []model.Stats
 )
 
@@ -229,8 +222,7 @@ func (s *StatsService) downsampleStats(stats []model.Stats, startTime, endTime i
 func (s *StatsService) GetOnlines() (onlines, error) {
 	statsMu.Lock()
 	defer statsMu.Unlock()
-	// Copied, not returned by reference: the caller must not hold slices the
-	// next cron tick is about to replace.
+	// Copied: the caller must not hold slices the next cron tick replaces.
 	return onlines{
 		Inbound:  append([]string(nil), onlineResources.Inbound...),
 		User:     append([]string(nil), onlineResources.User...),
@@ -242,13 +234,9 @@ func (s *StatsService) GetOnlines() (onlines, error) {
 // released between chunks.
 const delOldStatsChunk = 5000
 
-// DelOldStats drops stats older than the retention window.
-//
-// It deletes in bounded chunks rather than one unbounded statement. On a panel
-// with months of history that single DELETE held the write lock well past the
-// ten-second busy timeout, and the stats job that fires meanwhile had already
-// drained the core's counters -- so the daily cleanup was itself a cause of
-// lost traffic accounting.
+// DelOldStats drops stats older than the retention window, in bounded chunks.
+// One unbounded DELETE held the write lock past the busy timeout, which made
+// the daily cleanup itself a cause of lost traffic accounting.
 func (s *StatsService) DelOldStats(days int) error {
 	oldTime := time.Now().AddDate(0, 0, -(days)).Unix()
 	db := database.GetDB()
