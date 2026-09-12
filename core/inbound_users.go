@@ -8,7 +8,6 @@ import (
 	suiTuic "github.com/alireza0/s-ui/core/protocol/tuic"
 	suiVless "github.com/alireza0/s-ui/core/protocol/vless"
 	suiVmess "github.com/alireza0/s-ui/core/protocol/vmess"
-	"github.com/alireza0/s-ui/util/common"
 
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing-box/protocol/shadowsocks"
@@ -16,15 +15,15 @@ import (
 )
 
 func (c *Core) UpdateInboundUsers(config []byte) (bool, error) {
-	if !c.isRunning {
-		return false, common.NewError("sing-box is not running")
-	}
-	var inboundConfig option.Inbound
-	err := inboundConfig.UnmarshalJSONContext(c.GetCtx(), config)
+	box, err := c.running()
 	if err != nil {
 		return false, err
 	}
-	inb, found := inbound_manager.Get(inboundConfig.Tag)
+	var inboundConfig option.Inbound
+	if err = inboundConfig.UnmarshalJSONContext(box.ctx, config); err != nil {
+		return false, err
+	}
+	inb, found := box.inbound.Get(inboundConfig.Tag)
 	if !found {
 		return false, nil
 	}

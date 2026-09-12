@@ -24,33 +24,51 @@ func NewCronJob() *CronJob {
 }
 
 func (c *CronJob) Start(loc *time.Location, trafficAge int, statsBucketSeconds int64, globalReset string) error {
-	c.cron = cron.New(cron.WithLocation(loc), cron.WithParser(cronParser))
+	// Recover: robfig/cron does not recover panics by default, so a nil deref
+	// in any job took the whole panel process down -- gin only covers the HTTP
+	// side. SkipIfStillRunning: the stats job fires every 10s and can block
+	// that long on the SQLite write lock, and overlapping runs each drain the
+	// core's traffic counters.
+	c.cron = cron.New(
+		cron.WithLocation(loc),
+		cron.WithParser(cronParser),
+		cron.WithChain(
+			cron.Recover(cron.DefaultLogger),
+			cron.SkipIfStillRunning(cron.DefaultLogger),
+		),
+	)
+
+	// Registered before Start, not from a goroutine racing it, so a job cannot
+	// be missed on a panel that is stopped moments after boot.
+	addJob := func(spec string, job cron.Job, name string) {
+		if _, err := c.cron.AddJob(spec, job); err != nil {
+			logger.Warning("unable to schedule ", name, " <", spec, ">: ", err)
+		}
+	}
+
+	// Start stats job
+	addJob("@every 10s", NewStatsJob(trafficAge > 0, statsBucketSeconds), "stats job")
+	// Start expiry job
+	addJob("@every 1m", NewDepleteJob(), "deplete job")
+	// Periodic global traffic reset, only when a valid cron spec is configured
+	if globalReset != "" && globalReset != "off" {
+		schedule, err := cronParser.Parse(globalReset)
+		if err != nil {
+			logger.Warning("invalid globalReset cron spec <", globalReset, ">: ", err)
+		} else {
+			addJob(globalReset, NewResetTrafficJob(schedule), "traffic reset job")
+		}
+	}
+	// Start deleting old stats
+	if trafficAge > 0 {
+		addJob("@daily", NewDelStatsJob(trafficAge), "old stats cleanup")
+	}
+	// Start core if it is not running
+	addJob("@every 5s", NewCheckCoreJob(), "core watchdog")
+	// database WAL checkpoint
+	addJob("@every 10m", NewWALCheckpointJob(), "WAL checkpoint")
+
 	c.cron.Start()
-
-	go func() {
-		// Start stats job
-		c.cron.AddJob("@every 10s", NewStatsJob(trafficAge > 0, statsBucketSeconds))
-		// Start expiry job
-		c.cron.AddJob("@every 1m", NewDepleteJob())
-		// Periodic global traffic reset, only when a valid cron spec is configured
-		if globalReset != "" && globalReset != "off" {
-			schedule, err := cronParser.Parse(globalReset)
-			if err != nil {
-				logger.Warning("invalid globalReset cron spec <", globalReset, ">: ", err)
-			} else {
-				c.cron.AddJob(globalReset, NewResetTrafficJob(schedule))
-			}
-		}
-		// Start deleting old stats
-		if trafficAge > 0 {
-			c.cron.AddJob("@daily", NewDelStatsJob(trafficAge))
-		}
-		// Start core if it is not running
-		c.cron.AddJob("@every 5s", NewCheckCoreJob())
-		// database WAL checkpoint
-		c.cron.AddJob("@every 10m", NewWALCheckpointJob())
-	}()
-
 	return nil
 }
 

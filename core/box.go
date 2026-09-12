@@ -186,7 +186,6 @@ func NewBox(options Options) (*Box, error) {
 	if err != nil {
 		return nil, E.Cause(err, "create log factory")
 	}
-	factory = logFactory
 	service.MustRegister[log.Factory](ctx, logFactory)
 
 	var internalServices []adapter.LifecycleService

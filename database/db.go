@@ -36,8 +36,15 @@ func initUser() error {
 
 func OpenDB(dbPath string) error {
 	dir := path.Dir(dbPath)
-	err := os.MkdirAll(dir, 01740)
-	if err != nil {
+	// 0700, not the old 01740. That literal's 01000 bit is not Go's sticky bit
+	// (os.ModeSticky is 1<<24), so it was silently dropped and the directory
+	// came out 0740; the intent was clearly owner-only. MkdirAll also does
+	// nothing when the directory already exists, so an install that once had a
+	// looser mode kept it -- hence the explicit Chmod below.
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	if err := os.Chmod(dir, 0o700); err != nil {
 		return err
 	}
 
@@ -64,6 +71,7 @@ func OpenDB(dbPath string) error {
 	// job) cannot wait on the lock upgrade and fail instantly with "database
 	// is locked" whenever another writer (stats job) is active (#1209).
 	dsn := dbPath + sep + "_busy_timeout=10000&_journal_mode=WAL&_cache_size=-200&_txlock=immediate"
+	var err error
 	db, err = gorm.Open(sqlite.Open(dsn), c)
 	if err != nil {
 		return err
@@ -77,6 +85,18 @@ func OpenDB(dbPath string) error {
 	sqlDB.SetMaxIdleConns(2)
 	sqlDB.SetConnMaxLifetime(time.Hour)
 	sqlDB.SetConnMaxIdleTime(5 * time.Minute)
+
+	// SQLite creates the database 0666 & ~umask, so it lands world-readable on
+	// a default umask. It holds every client's credentials, the API tokens in
+	// plaintext and the session secret. The owner-only directory above already
+	// blocks other users from reaching it, but the file should not depend on
+	// that alone -- a copied or moved database would carry the loose mode with
+	// it. The sidecars hold the same pages.
+	for _, p := range []string{dbPath, dbPath + "-wal", dbPath + "-shm"} {
+		if err := os.Chmod(p, 0o600); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
 
 	if config.IsDebug() {
 		db = db.Debug()
@@ -103,19 +123,7 @@ func InitDB(dbPath string) error {
 		return err
 	}
 
-	err = db.AutoMigrate(
-		&model.Setting{},
-		&model.Tls{},
-		&model.Inbound{},
-		&model.Outbound{},
-		&model.Service{},
-		&model.Endpoint{},
-		&model.User{},
-		&model.Tokens{},
-		&model.Stats{},
-		&model.Client{},
-		&model.Changes{},
-	)
+	err = db.AutoMigrate(schemaModels()...)
 	if err != nil {
 		return err
 	}

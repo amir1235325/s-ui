@@ -110,6 +110,7 @@ func TestConfigCompat(t *testing.T) {
 			}
 
 			instance, err := NewBox(Options{Context: ctx, Options: opts})
+			skipIfFeatureMissing(t, err)
 			if err != nil {
 				t.Fatalf("create box: %v", err)
 			}

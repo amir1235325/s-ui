@@ -33,14 +33,31 @@ func (s *ResetTrafficJob) Run() {
 		logger.Warning("ResetTrafficJob: get last reset time failed: ", err)
 		return
 	}
-	// Configured start date / next boundary not reached yet
+	// Configured start date / next boundary not reached yet.
+	//
+	// Logged, because this used to be a silent return: the setting holds the
+	// *next* boundary despite its name, and it is not cleared when the operator
+	// changes the schedule. Someone switching a monthly reset to a daily one
+	// would then see nothing happen for up to a month, with no clue why.
 	if last > now.Unix() {
+		logger.Debug("ResetTrafficJob: next reset is at ", time.Unix(last, 0).In(loc).Format(time.RFC3339), ", nothing to do")
 		return
 	}
 
 	if err = s.ClientService.ResetAllClientsTraffic(); err != nil {
 		logger.Warning("ResetTrafficJob: reset all clients failed: ", err)
 		return
+	}
+
+	// Restart before the bookkeeping write, not after.
+	//
+	// Clients were just re-enabled in the database, but the running core still
+	// holds the old user list. When the write below failed, the old code
+	// returned early and never restarted, so those clients stayed disconnected
+	// -- and the watchdog does not help, because it only starts a core that is
+	// not running.
+	if err = s.ConfigService.RestartCore(); err != nil {
+		logger.Error("ResetTrafficJob: unable to restart core: ", err)
 	}
 
 	// Advance to the next boundary. schedule.Next returns the nearest upcoming
@@ -52,9 +69,4 @@ func (s *ResetTrafficJob) Run() {
 		return
 	}
 	logger.Info("ResetTrafficJob: traffic reset for all clients; next reset at ", next.Format(time.RFC3339))
-
-	// Restart the whole core so re-enabled clients take effect.
-	if err = s.ConfigService.RestartCore(); err != nil {
-		logger.Error("ResetTrafficJob: unable to restart core: ", err)
-	}
 }

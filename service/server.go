@@ -139,10 +139,14 @@ func (s *ServerService) GetNetInfo() map[string]interface{} {
 func (s *ServerService) GetSingboxInfo() map[string]interface{} {
 	var rtm runtime.MemStats
 	runtime.ReadMemStats(&rtm)
-	isRunning := corePtr.IsRunning()
+	// One GetInstance, then a nil check. Reading IsRunning and dereferencing
+	// GetInstance separately let a stop land in between, and this is the
+	// endpoint the dashboard polls every few seconds.
+	box := corePtr.GetInstance()
+	isRunning := box != nil
 	uptime := uint32(0)
 	if isRunning {
-		uptime = corePtr.GetInstance().Uptime()
+		uptime = box.Uptime()
 	}
 	return map[string]interface{}{
 		"running": isRunning,

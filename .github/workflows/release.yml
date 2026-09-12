@@ -191,9 +191,11 @@ jobs:
       - name: Build s-ui
         run: |
           set -e
-          BUILD_TAGS="with_quic,with_grpc,with_utls,with_acme,with_gvisor,badlinkname,tfogo_checklinkname0,with_tailscale,with_cloudflared,with_openconnect,with_openvpn"
-          [ "${{ matrix.naive }}" = "true" ] && BUILD_TAGS="${BUILD_TAGS},with_naive_outbound,with_musl"
-          go build -ldflags="-w -s -checklinkname=0 -linkmode external -extldflags '-static'" -tags "$BUILD_TAGS" -o sui main.go
+          . ./build-tags.sh
+          if [ "${{ matrix.naive }}" = "true" ]; then PROFILE=release; else PROFILE=test; fi
+          TAGS=$(tags_for "$PROFILE")
+          LDFLAGS=$(ldflags_for "$PROFILE")
+          go build -ldflags="$LDFLAGS -linkmode external -extldflags '-static'" -tags "$TAGS" -o sui main.go
           file sui
           ldd sui 2>/dev/null || echo "Static binary confirmed"
 

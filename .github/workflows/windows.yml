@@ -19,7 +19,6 @@ on:
 
 env:
   NODE_VERSION: "25"
-  TAGS: "with_quic,with_grpc,with_utls,with_acme,with_gvisor,with_naive_outbound,with_purego,badlinkname,tfogo_checklinkname0,with_tailscale,with_cloudflared,with_openconnect,with_openvpn"
   LIBCRONET_BASE_URL: "https://github.com/SagerNet/cronet-go/releases/latest/download"
 
 jobs:
@@ -102,7 +101,10 @@ jobs:
           go version
           go env GOOS GOARCH
           
-          go build -ldflags="-w -s -checklinkname=0" -tags "${{ env.TAGS }}" -o sui.exe main.go
+          . ./build-tags.sh
+          TAGS=$(tags_for windows)
+          LDFLAGS=$(ldflags_for windows)
+          go build -ldflags="$LDFLAGS" -tags "$TAGS" -o sui.exe main.go
           file sui.exe
           
           mkdir s-ui-windows

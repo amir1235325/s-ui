@@ -1,6 +1,7 @@
 package service
 
 import (
+	"sync"
 	"time"
 
 	"github.com/alireza0/s-ui/database"
@@ -16,7 +17,24 @@ type onlines struct {
 	Outbound []string `json:"outbound,omitempty"`
 }
 
-var onlineResources = &onlines{}
+var (
+	// statsMu guards both of the values below. SaveStats runs on the ten-second
+	// cron while GetOnlines is read from a gin handler, and the slices were
+	// being rebuilt under the reader's feet.
+	statsMu         sync.Mutex
+	onlineResources = &onlines{}
+
+	// pendingStats holds traffic drained from the core that has not reached the
+	// database yet.
+	//
+	// StatsTracker.GetStats is destructive -- it Swap(0)s every counter -- so
+	// the old code lost the whole ten-second window for every user whenever the
+	// transaction failed. With _txlock=immediate a single SQLITE_BUSY from the
+	// daily stats purge was enough, and the counters were already zeroed by
+	// then, so the traffic could not be recovered. Carrying it forward means a
+	// busy database delays accounting instead of dropping it.
+	pendingStats []model.Stats
+)
 
 type StatsService struct {
 }
@@ -33,14 +51,19 @@ func (s *StatsService) SaveStats(enableTraffic bool, bucketSeconds int64) error 
 	if st == nil {
 		return nil
 	}
-	stats := st.GetStats()
+	drained := st.GetStats()
 
-	// Reset onlines
-	onlineResources.Inbound = nil
-	onlineResources.Outbound = nil
-	onlineResources.User = nil
+	statsMu.Lock()
+	// Anything a previous cycle could not commit goes in ahead of this one.
+	batch := append(pendingStats, (*drained)...)
+	pendingStats = nil
+	online := &onlines{}
+	statsMu.Unlock()
 
-	if len(*stats) == 0 {
+	if len(batch) == 0 {
+		statsMu.Lock()
+		onlineResources = online
+		statsMu.Unlock()
 		return nil
 	}
 
@@ -49,10 +72,21 @@ func (s *StatsService) SaveStats(enableTraffic bool, bucketSeconds int64) error 
 	tx := db.Begin()
 	defer func() {
 		if err == nil {
-			tx.Commit()
+			if cErr := tx.Commit().Error; cErr != nil {
+				err = cErr
+			}
 		} else {
 			tx.Rollback()
 		}
+		statsMu.Lock()
+		if err != nil {
+			// Hold the drained traffic for the next cycle rather than dropping
+			// it on the floor.
+			pendingStats = batch
+		} else {
+			onlineResources = online
+		}
+		statsMu.Unlock()
 	}()
 
 	now := time.Now().Unix()
@@ -64,24 +98,24 @@ func (s *StatsService) SaveStats(enableTraffic bool, bucketSeconds int64) error 
 	userTraffic := map[string]*traffic{}
 	seenInbound := map[string]bool{}
 	seenOutbound := map[string]bool{}
-	for _, stat := range *stats {
+	for _, stat := range batch {
 		switch stat.Resource {
 		case "inbound":
 			if !seenInbound[stat.Tag] {
 				seenInbound[stat.Tag] = true
-				onlineResources.Inbound = append(onlineResources.Inbound, stat.Tag)
+				online.Inbound = append(online.Inbound, stat.Tag)
 			}
 		case "outbound":
 			if !seenOutbound[stat.Tag] {
 				seenOutbound[stat.Tag] = true
-				onlineResources.Outbound = append(onlineResources.Outbound, stat.Tag)
+				online.Outbound = append(online.Outbound, stat.Tag)
 			}
 		case "user":
 			t, ok := userTraffic[stat.Tag]
 			if !ok {
 				t = &traffic{}
 				userTraffic[stat.Tag] = t
-				onlineResources.User = append(onlineResources.User, stat.Tag)
+				online.User = append(online.User, stat.Tag)
 			}
 			if stat.Direction {
 				t.up += stat.Traffic
@@ -115,13 +149,13 @@ func (s *StatsService) SaveStats(enableTraffic bool, bucketSeconds int64) error 
 		bucketSeconds = 1
 	}
 	bucket := now - (now % bucketSeconds)
-	for i := range *stats {
-		(*stats)[i].DateTime = bucket
+	for i := range batch {
+		batch[i].DateTime = bucket
 	}
 	err = tx.Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "resource"}, {Name: "tag"}, {Name: "date_time"}, {Name: "direction"}},
 		DoUpdates: clause.Assignments(map[string]interface{}{"traffic": gorm.Expr("stats.traffic + excluded.traffic")}),
-	}).Create(&stats).Error
+	}).Create(&batch).Error
 	return err
 }
 
@@ -193,10 +227,40 @@ func (s *StatsService) downsampleStats(stats []model.Stats, startTime, endTime i
 }
 
 func (s *StatsService) GetOnlines() (onlines, error) {
-	return *onlineResources, nil
+	statsMu.Lock()
+	defer statsMu.Unlock()
+	// Copied, not returned by reference: the caller must not hold slices the
+	// next cron tick is about to replace.
+	return onlines{
+		Inbound:  append([]string(nil), onlineResources.Inbound...),
+		User:     append([]string(nil), onlineResources.User...),
+		Outbound: append([]string(nil), onlineResources.Outbound...),
+	}, nil
 }
+
+// delOldStatsChunk caps how many rows one DELETE removes, so the write lock is
+// released between chunks.
+const delOldStatsChunk = 5000
+
+// DelOldStats drops stats older than the retention window.
+//
+// It deletes in bounded chunks rather than one unbounded statement. On a panel
+// with months of history that single DELETE held the write lock well past the
+// ten-second busy timeout, and the stats job that fires meanwhile had already
+// drained the core's counters -- so the daily cleanup was itself a cause of
+// lost traffic accounting.
 func (s *StatsService) DelOldStats(days int) error {
 	oldTime := time.Now().AddDate(0, 0, -(days)).Unix()
 	db := database.GetDB()
-	return db.Where("date_time < ?", oldTime).Delete(model.Stats{}).Error
+	for {
+		res := db.Where("id IN (?)",
+			db.Model(model.Stats{}).Select("id").Where("date_time < ?", oldTime).Limit(delOldStatsChunk),
+		).Delete(model.Stats{})
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected < delOldStatsChunk {
+			return nil
+		}
+	}
 }
