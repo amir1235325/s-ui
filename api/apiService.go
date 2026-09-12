@@ -342,7 +342,7 @@ func (a *ApiService) Save(c *gin.Context, loginUser string) {
 }
 
 func (a *ApiService) RestartApp(c *gin.Context) {
-	err := a.PanelService.RestartPanel(3)
+	err := a.PanelService.RestartPanel(3 * time.Second)
 	jsonMsg(c, "restartApp", err)
 }
 

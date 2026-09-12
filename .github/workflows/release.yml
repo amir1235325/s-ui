@@ -61,6 +61,9 @@ jobs:
   build-linux:
     name: build-${{ matrix.platform }}
     needs: build-frontend
+    # The `always()` on build-frontend only rescues that job: a skipped `test`
+    # keeps propagating down the graph unless every dependent repeats it.
+    if: ${{ always() && needs.build-frontend.result == 'success' }}
     strategy:
       fail-fast: false
       matrix:
@@ -221,6 +224,7 @@ jobs:
 
   build-windows:
     needs: build-frontend
+    if: ${{ always() && needs.build-frontend.result == 'success' }}
     name: build-windows-${{ matrix.arch }}
     strategy:
       fail-fast: false
@@ -303,8 +307,11 @@ jobs:
   publish:
     needs: [build-linux, build-windows]
     if: |
-      (github.event_name == 'release' && github.event.action == 'published') ||
-      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/'))
+      always() &&
+      needs.build-linux.result == 'success' &&
+      needs.build-windows.result == 'success' &&
+      ((github.event_name == 'release' && github.event.action == 'published') ||
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')))
     runs-on: ubuntu-latest
     permissions:
       contents: write
